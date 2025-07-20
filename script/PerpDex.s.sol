@@ -10,8 +10,8 @@ contract PerpDexScript is Script {
     function setUp() public {}
 
     function run() public {
-        address pythAddress = 0xA2aa501b19aff244D90cc15a4Cf739D2725B5729; // Sepolia Pyth
-        address usdtAddress = 0xe673aCedccEb6D19a4353f6fD10EceaE5453ae6f; // Use deployed USDT or test token
+        address usdtAddress = vm.envAddress("USDT_ADDRESS");
+        address pythAddress = vm.envAddress("PYTH_ADDRESS");
 
         vm.startBroadcast();
 

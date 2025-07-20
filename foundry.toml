@@ -1,5 +1,5 @@
 [rpc_endpoints]
-sepolia = "${SEPOLIA_RPC_URL}"
+rpc_url = "${RPC_URL}"
 
 [profile.default]
 src = "src"

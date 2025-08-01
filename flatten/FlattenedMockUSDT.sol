@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity >=0.4.16 >=0.6.2 >=0.8.4 ^0.8.20;
 
 // lib/openzeppelin-contracts/contracts/utils/Context.sol
 
@@ -31,7 +31,7 @@ abstract contract Context {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/IERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/IERC20.sol)
 
 /**
  * @dev Interface of the ERC-20 standard as defined in the ERC.
@@ -110,7 +110,7 @@ interface IERC20 {
 
 // lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (interfaces/draft-IERC6093.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (interfaces/draft-IERC6093.sol)
 
 /**
  * @dev Standard ERC-20 Errors
@@ -272,7 +272,7 @@ interface IERC1155Errors {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/extensions/IERC20Metadata.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/extensions/IERC20Metadata.sol)
 
 /**
  * @dev Interface for the optional metadata functions from the ERC-20 standard.
@@ -296,7 +296,7 @@ interface IERC20Metadata is IERC20 {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol
 
-// OpenZeppelin Contracts (last updated v5.3.0) (token/ERC20/ERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/ERC20.sol)
 
 /**
  * @dev Implementation of the {IERC20} interface.
@@ -368,16 +368,12 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
         return 18;
     }
 
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
+    /// @inheritdoc IERC20
     function totalSupply() public view virtual returns (uint256) {
         return _totalSupply;
     }
 
-    /**
-     * @dev See {IERC20-balanceOf}.
-     */
+    /// @inheritdoc IERC20
     function balanceOf(address account) public view virtual returns (uint256) {
         return _balances[account];
     }
@@ -396,9 +392,7 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
         return true;
     }
 
-    /**
-     * @dev See {IERC20-allowance}.
-     */
+    /// @inheritdoc IERC20
     function allowance(address owner, address spender) public view virtual returns (uint256) {
         return _allowances[owner][spender];
     }

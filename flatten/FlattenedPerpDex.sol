@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0 ^0.8.20;
+pragma solidity >=0.4.16 >=0.6.2 >=0.8.4 ^0.8.0 ^0.8.20;
 
 // lib/openzeppelin-contracts/contracts/utils/Context.sol
 
@@ -31,7 +31,7 @@ abstract contract Context {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/IERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/IERC20.sol)
 
 /**
  * @dev Interface of the ERC-20 standard as defined in the ERC.
@@ -166,7 +166,7 @@ contract PythStructs {
 
 // lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (interfaces/draft-IERC6093.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (interfaces/draft-IERC6093.sol)
 
 /**
  * @dev Standard ERC-20 Errors
@@ -328,7 +328,7 @@ interface IERC1155Errors {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol
 
-// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC20/extensions/IERC20Metadata.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/extensions/IERC20Metadata.sol)
 
 /**
  * @dev Interface for the optional metadata functions from the ERC-20 standard.
@@ -488,7 +488,7 @@ interface IPyth is IPythEvents {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol
 
-// OpenZeppelin Contracts (last updated v5.3.0) (token/ERC20/ERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/ERC20.sol)
 
 /**
  * @dev Implementation of the {IERC20} interface.
@@ -560,16 +560,12 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
         return 18;
     }
 
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
+    /// @inheritdoc IERC20
     function totalSupply() public view virtual returns (uint256) {
         return _totalSupply;
     }
 
-    /**
-     * @dev See {IERC20-balanceOf}.
-     */
+    /// @inheritdoc IERC20
     function balanceOf(address account) public view virtual returns (uint256) {
         return _balances[account];
     }
@@ -588,9 +584,7 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
         return true;
     }
 
-    /**
-     * @dev See {IERC20-allowance}.
-     */
+    /// @inheritdoc IERC20
     function allowance(address owner, address spender) public view virtual returns (uint256) {
         return _allowances[owner][spender];
     }
@@ -797,6 +791,14 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
 contract PerpDEX {
     IPyth public pyth;
     ERC20 public usdt;
+    uint256 public constant MAINTENANCE_MARGIN_RATIO = 5e16; // 0.05 = 5%
+    uint256 public constant PRECISION = 1e18;
+    uint256 public constant FEE_RATIO = 1e15; // 0.001 = 0.1%
+
+    constructor(address _usdt, address _pyth) {
+        usdt = ERC20(_usdt);
+        pyth = IPyth(_pyth);
+    }
 
     struct Position {
         bytes32 id;
@@ -806,119 +808,169 @@ contract PerpDEX {
         uint256 size;
         uint256 entryPrice;
         bytes32 pythTokenId;
-        bool isClose;
+        bool isClosed;
+        uint256 closePrice;
+        uint256 payout;
+        uint256 liquidationPrice;
+        uint256 positionFees;
     }
 
     mapping(address => Position[]) public positions;
 
-    constructor(address _usdt, address _pyth) {
-        usdt = ERC20(_usdt);
-        pyth = IPyth(_pyth);
-    }
-
     event OpenPosition(
-        bytes32 id,
+        bytes32 indexed id,
         string pairs,
         bool isLong,
         uint256 margin,
         uint256 size,
-        uint256 entryPrice
+        uint256 entryPrice,
+        bytes32 pythTokenId,
+        bool isClosed,
+        address userAddress,
+        uint256 blockNumber,
+        uint256 blockTimeStamp,
+        uint256 liquidationPrice,
+        uint256 positionFees
     );
 
-    event ClosePosition(bytes32 id, uint256 closePrice, uint256 payout);
+    event ClosePosition(bytes32 indexed id, uint256 closePrice, uint256 payout);
 
     function openPosition(
         string calldata _pairs,
         bool _isLong,
         uint256 _margin,
         uint256 _size,
-        bytes32 _priceId // Pyth Token Id
+        bytes32 _pythTokenId
     ) external {
-        // Transfer collateral from user to contract
+        require(_margin > 0 && _size > 0);
         require(
             usdt.transferFrom(msg.sender, address(this), _margin),
             "USDT transfer failed"
         );
 
-        // Read the price
-        PythStructs.Price memory token = pyth.getPrice(_priceId);
+        uint256 fee = (_margin * FEE_RATIO) / 1e18;
+        uint256 netMargin = _margin - fee;
+        uint256 netSize = netMargin * (_size / _margin);
+
+        PythStructs.Price memory token = pyth.getPrice(_pythTokenId);
         require(token.price > 0, "Invalid price");
 
+        uint256 entryPrice = toUint(token.price);
+        uint256 liquidationPrice = calculateLiquidationPrice(
+            entryPrice,
+            netSize,
+            netMargin,
+            _isLong
+        );
         bytes32 id = keccak256(
             abi.encodePacked(msg.sender, block.timestamp, block.number)
         );
 
-        // Save the position
+        uint256 maintenanceMargin = (netSize * MAINTENANCE_MARGIN_RATIO) /
+            PRECISION;
+        require(netMargin > maintenanceMargin, "Margin below required minimum");
+
         positions[msg.sender].push(
             Position(
                 id,
                 _pairs,
                 _isLong,
-                _margin,
-                _size,
-                toUint(token.price),
-                _priceId,
-                false
+                netMargin,
+                netSize,
+                entryPrice,
+                _pythTokenId,
+                false,
+                0,
+                0,
+                liquidationPrice,
+                fee
             )
         );
 
-        // Emit event to store on backend
         emit OpenPosition(
             id,
             _pairs,
             _isLong,
-            _margin,
-            _size,
-            toUint(token.price)
+            netMargin,
+            netSize,
+            entryPrice,
+            _pythTokenId,
+            false,
+            msg.sender,
+            block.number,
+            block.timestamp,
+            liquidationPrice,
+            fee
         );
     }
 
     function closePosition(bytes32 _positionId) external {
-        // Find position
-        for (uint i = 0; i < positions[msg.sender].length; i++) {
-            if (
-                positions[msg.sender][i].isClose == false &&
-                positions[msg.sender][i].id == _positionId
-            ) {
-                PythStructs.Price memory token = pyth.getPrice(
-                    positions[msg.sender][i].pythTokenId
-                );
+        Position[] storage userPositions = positions[msg.sender];
+        uint256 len = userPositions.length;
+
+        for (uint256 i = 0; i < len; i++) {
+            Position storage pos = userPositions[i];
+
+            if (!pos.isClosed && pos.id == _positionId) {
+                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
                 require(token.price > 0, "Invalid price");
 
+                uint256 currentPrice = toUint(token.price);
                 uint256 pnl;
 
-                if (positions[msg.sender][i].isLong) {
+                if (pos.isLong) {
                     pnl =
-                        (positions[msg.sender][i].size *
-                            (toUint(token.price) -
-                                positions[msg.sender][i].entryPrice)) /
-                        positions[msg.sender][i].entryPrice;
+                        (pos.size * (currentPrice - pos.entryPrice)) /
+                        pos.entryPrice;
                 } else {
                     pnl =
-                        (positions[msg.sender][i].size *
-                            (positions[msg.sender][i].entryPrice -
-                                toUint(token.price))) /
-                        positions[msg.sender][i].entryPrice;
+                        (pos.size * (pos.entryPrice - currentPrice)) /
+                        pos.entryPrice;
                 }
 
-                uint256 payout = positions[msg.sender][i].margin + pnl;
-
+                uint256 payout = pos.margin + pnl;
                 require(
                     usdt.transfer(msg.sender, payout),
-                    "USDT transfer failed"
+                    "USDT payout failed"
                 );
 
-                // Settle the trade (send funds, update storage, etc.)
-                positions[msg.sender][i].isClose = true;
+                pos.isClosed = true;
 
-                // Emit event to store on backend
-                emit ClosePosition(_positionId, toUint(token.price), payout);
+                emit ClosePosition(_positionId, currentPrice, payout);
+                return;
             }
+        }
+
+        revert("Position not found or already closed");
+    }
+
+    function calculateLiquidationPrice(
+        uint256 entryPrice,
+        uint256 size,
+        uint256 margin,
+        bool isLong
+    ) internal pure returns (uint256) {
+        uint256 maintenanceMargin = (size * MAINTENANCE_MARGIN_RATIO) /
+            PRECISION;
+
+        require(
+            margin > maintenanceMargin,
+            "Margin too low for liquidation calc"
+        );
+
+        uint256 maxLoss = margin - maintenanceMargin;
+        uint256 lossRatio = (maxLoss * PRECISION) / size;
+        uint256 priceChange = (entryPrice * lossRatio) / PRECISION;
+
+        if (isLong) {
+            return entryPrice - priceChange;
+        } else {
+            return entryPrice + priceChange;
         }
     }
 
     function toUint(int64 x) internal pure returns (uint256) {
-        require(x >= 0, "Negative int64 can't convert to uint");
+        require(x >= 0, "Negative price");
         return uint256(int256(x));
     }
 }

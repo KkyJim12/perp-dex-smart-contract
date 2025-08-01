@@ -3,133 +3,170 @@ pragma solidity ^0.8.20;
 
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 
 contract PerpDEX {
-    IPyth public pyth;
-    ERC20 public usdt;
+    IPyth public immutable pyth;
+    ERC20 public immutable usdt;
+    uint256 public constant FEE_RATIO = 5e14; // 0.05%
 
     struct Position {
         bytes32 id;
         string pairs;
         bool isLong;
         uint256 margin;
+        uint256 leverage;
         uint256 size;
         uint256 entryPrice;
         bytes32 pythTokenId;
-        bool isClose;
+        bool isClosed;
+        uint256 closePrice;
+        uint256 payout;
+        uint256 liquidationPrice;
+        uint256 fees;
     }
 
     mapping(address => Position[]) public positions;
 
+    event OpenPosition(
+        bytes32 indexed id,
+        address indexed user,
+        string pairs,
+        bool isLong,
+        uint256 margin,
+        uint256 leverage,
+        uint256 size,
+        uint256 entryPrice,
+        bytes32 pythTokenId,
+        uint256 liquidationPrice,
+        uint256 fees
+    );
+
+    event ClosePosition(
+        bytes32 indexed id,
+        address indexed user,
+        uint256 closePrice,
+        uint256 payout
+    );
+
     constructor(address _usdt, address _pyth) {
+        require(_usdt != address(0) && _pyth != address(0), "Invalid address");
         usdt = ERC20(_usdt);
         pyth = IPyth(_pyth);
     }
 
-    event OpenPosition(
-        bytes32 id,
-        string pairs,
+    function openPosition(
+        string calldata pairs,
         bool isLong,
         uint256 margin,
-        uint256 size,
-        uint256 entryPrice
-    );
-
-    event ClosePosition(bytes32 id, uint256 closePrice, uint256 payout);
-
-    function openPosition(
-        string calldata _pairs,
-        bool _isLong,
-        uint256 _margin,
-        uint256 _size,
-        bytes32 _priceId // Pyth Token Id
+        uint256 leverage,
+        bytes32 pythTokenId
     ) external {
-        // Transfer collateral from user to contract
-        require(
-            usdt.transferFrom(msg.sender, address(this), _margin),
-            "USDT transfer failed"
-        );
+        require(margin > 0 && leverage > 0, "Invalid margin or leverage");
+        require(usdt.transferFrom(msg.sender, address(this), margin), "USDT transfer failed");
 
-        // Read the price
-        PythStructs.Price memory token = pyth.getPrice(_priceId);
+        uint256 fees = (margin * leverage * FEE_RATIO) / 1e18;
+        uint256 netMargin = margin - fees;
+        uint256 netSize = netMargin * leverage;
+
+        _finalizeOpenPosition(pairs, isLong, netMargin, leverage, netSize, pythTokenId, fees);
+    }
+
+    function _finalizeOpenPosition(
+        string calldata pairs,
+        bool isLong,
+        uint256 netMargin,
+        uint256 leverage,
+        uint256 netSize,
+        bytes32 pythTokenId,
+        uint256 fees
+    ) internal {
+        PythStructs.Price memory token = pyth.getPrice(pythTokenId);
         require(token.price > 0, "Invalid price");
 
-        bytes32 id = keccak256(
-            abi.encodePacked(msg.sender, block.timestamp, block.number)
-        );
+        uint256 entryPrice = toUint(token.price);
+        uint256 liquidationPrice = calculateLiquidationPrice(entryPrice, netSize, netMargin, isLong);
+        bytes32 id = keccak256(abi.encodePacked(msg.sender, block.timestamp, block.number));
 
-        // Save the position
-        positions[msg.sender].push(
-            Position(
-                id,
-                _pairs,
-                _isLong,
-                _margin,
-                _size,
-                toUint(token.price),
-                _priceId,
-                false
-            )
-        );
+        positions[msg.sender].push(Position({
+            id: id,
+            pairs: pairs,
+            isLong: isLong,
+            margin: netMargin,
+            leverage: leverage,
+            size: netSize,
+            entryPrice: entryPrice,
+            pythTokenId: pythTokenId,
+            isClosed: false,
+            closePrice: 0,
+            payout: 0,
+            liquidationPrice: liquidationPrice,
+            fees: fees
+        }));
 
-        // Emit event to store on backend
         emit OpenPosition(
             id,
-            _pairs,
-            _isLong,
-            _margin,
-            _size,
-            toUint(token.price)
+            msg.sender,
+            pairs,
+            isLong,
+            netMargin,
+            leverage,
+            netSize,
+            entryPrice,
+            pythTokenId,
+            liquidationPrice,
+            fees
         );
     }
 
-    function closePosition(bytes32 _positionId) external {
-        // Find position
-        for (uint i = 0; i < positions[msg.sender].length; i++) {
-            if (
-                positions[msg.sender][i].isClose == false &&
-                positions[msg.sender][i].id == _positionId
-            ) {
-                PythStructs.Price memory token = pyth.getPrice(
-                    positions[msg.sender][i].pythTokenId
-                );
+    function closePosition(bytes32 positionId) external {
+        Position[] storage userPositions = positions[msg.sender];
+        uint256 len = userPositions.length;
+
+        for (uint256 i = 0; i < len; i++) {
+            Position storage pos = userPositions[i];
+            if (!pos.isClosed && pos.id == positionId) {
+                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
                 require(token.price > 0, "Invalid price");
 
-                uint256 pnl;
+                uint256 currentPrice = toUint(token.price);
+                int256 pnl;
 
-                if (positions[msg.sender][i].isLong) {
-                    pnl =
-                        (positions[msg.sender][i].size *
-                            (toUint(token.price) -
-                                positions[msg.sender][i].entryPrice)) /
-                        positions[msg.sender][i].entryPrice;
+                if (pos.isLong) {
+                    pnl = (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice);
                 } else {
-                    pnl =
-                        (positions[msg.sender][i].size *
-                            (positions[msg.sender][i].entryPrice -
-                                toUint(token.price))) /
-                        positions[msg.sender][i].entryPrice;
+                    pnl = (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
                 }
 
-                uint256 payout = positions[msg.sender][i].margin + pnl;
+                int256 rawPayout = int256(pos.margin) + pnl;
+                uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-                require(
-                    usdt.transfer(msg.sender, payout),
-                    "USDT transfer failed"
-                );
+                require(usdt.transfer(msg.sender, payout), "USDT payout failed");
 
-                // Settle the trade (send funds, update storage, etc.)
-                positions[msg.sender][i].isClose = true;
+                pos.isClosed = true;
+                pos.closePrice = currentPrice;
+                pos.payout = payout;
 
-                // Emit event to store on backend
-                emit ClosePosition(_positionId, toUint(token.price), payout);
+                emit ClosePosition(positionId, msg.sender, currentPrice, payout);
+                return;
             }
         }
+
+        revert("Position not found or already closed");
+    }
+
+    function calculateLiquidationPrice(
+        uint256 entryPrice,
+        uint256 size,
+        uint256 margin,
+        bool isLong
+    ) internal pure returns (uint256) {
+        uint256 priceChange = (entryPrice * margin) / size;
+        return isLong ? entryPrice - priceChange : entryPrice + priceChange;
     }
 
     function toUint(int64 x) internal pure returns (uint256) {
-        require(x >= 0, "Negative int64 can't convert to uint");
+        require(x >= 0, "Negative price");
         return uint256(int256(x));
     }
 }

@@ -1,9 +1,11 @@
 Deploy Command (Monad)
 forge script script/MockUSDT.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
+forge script script/User.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
 forge script script/PerpDex.s.sol:PerpDexScript --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID --broadcast
 
 Flatten Command 
 forge flatten src/MockUSDT.sol > flatten/FlattenedMockUSDT.sol
+forge flatten src/User.sol > flatten/FlattenedUser.sol
 forge flatten src/PerpDex.sol > flatten/FlattenedPerpDex.sol
 
 Verify Command (Monad)

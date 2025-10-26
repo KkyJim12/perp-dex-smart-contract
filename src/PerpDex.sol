@@ -27,6 +27,7 @@ contract PerpDEX {
     }
 
     mapping(address => Position[]) public positions;
+    mapping(address => string) public username;
 
     event OpenPosition(
         bytes32 indexed id,
@@ -49,10 +50,22 @@ contract PerpDEX {
         uint256 payout
     );
 
+    event RegisterUser(address indexed userAddress, string username);
+
     constructor(address _usdt, address _pyth) {
         require(_usdt != address(0) && _pyth != address(0), "Invalid address");
         usdt = ERC20(_usdt);
         pyth = IPyth(_pyth);
+    }
+
+    function registerUser(string calldata _username) external {
+        require(bytes(_username).length > 0, "Username cannot be empty");
+        require(
+            bytes(username[msg.sender]).length == 0,
+            "User already registered"
+        );
+        username[msg.sender] = _username;
+        emit RegisterUser(msg.sender, _username);
     }
 
     function openPosition(
@@ -63,13 +76,24 @@ contract PerpDEX {
         bytes32 pythTokenId
     ) external {
         require(margin > 0 && leverage > 0, "Invalid margin or leverage");
-        require(usdt.transferFrom(msg.sender, address(this), margin), "USDT transfer failed");
+        require(
+            usdt.transferFrom(msg.sender, address(this), margin),
+            "USDT transfer failed"
+        );
 
         uint256 fees = (margin * leverage * FEE_RATIO) / 1e18;
         uint256 netMargin = margin - fees;
         uint256 netSize = netMargin * leverage;
 
-        _finalizeOpenPosition(pairs, isLong, netMargin, leverage, netSize, pythTokenId, fees);
+        _finalizeOpenPosition(
+            pairs,
+            isLong,
+            netMargin,
+            leverage,
+            netSize,
+            pythTokenId,
+            fees
+        );
     }
 
     function _finalizeOpenPosition(
@@ -85,24 +109,33 @@ contract PerpDEX {
         require(token.price > 0, "Invalid price");
 
         uint256 entryPrice = toUint(token.price);
-        uint256 liquidationPrice = calculateLiquidationPrice(entryPrice, netSize, netMargin, isLong);
-        bytes32 id = keccak256(abi.encodePacked(msg.sender, block.timestamp, block.number));
+        uint256 liquidationPrice = calculateLiquidationPrice(
+            entryPrice,
+            netSize,
+            netMargin,
+            isLong
+        );
+        bytes32 id = keccak256(
+            abi.encodePacked(msg.sender, block.timestamp, block.number)
+        );
 
-        positions[msg.sender].push(Position({
-            id: id,
-            pairs: pairs,
-            isLong: isLong,
-            margin: netMargin,
-            leverage: leverage,
-            size: netSize,
-            entryPrice: entryPrice,
-            pythTokenId: pythTokenId,
-            isClosed: false,
-            closePrice: 0,
-            payout: 0,
-            liquidationPrice: liquidationPrice,
-            fees: fees
-        }));
+        positions[msg.sender].push(
+            Position({
+                id: id,
+                pairs: pairs,
+                isLong: isLong,
+                margin: netMargin,
+                leverage: leverage,
+                size: netSize,
+                entryPrice: entryPrice,
+                pythTokenId: pythTokenId,
+                isClosed: false,
+                closePrice: 0,
+                payout: 0,
+                liquidationPrice: liquidationPrice,
+                fees: fees
+            })
+        );
 
         emit OpenPosition(
             id,
@@ -133,21 +166,35 @@ contract PerpDEX {
                 int256 pnl;
 
                 if (pos.isLong) {
-                    pnl = (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice);
+                    pnl =
+                        (int256(pos.size) *
+                            (int256(currentPrice) - int256(pos.entryPrice))) /
+                        int256(pos.entryPrice);
                 } else {
-                    pnl = (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
+                    pnl =
+                        (int256(pos.size) *
+                            (int256(pos.entryPrice) - int256(currentPrice))) /
+                        int256(pos.entryPrice);
                 }
 
                 int256 rawPayout = int256(pos.margin) + pnl;
                 uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-                require(usdt.transfer(msg.sender, payout), "USDT payout failed");
+                require(
+                    usdt.transfer(msg.sender, payout),
+                    "USDT payout failed"
+                );
 
                 pos.isClosed = true;
                 pos.closePrice = currentPrice;
                 pos.payout = payout;
 
-                emit ClosePosition(positionId, msg.sender, currentPrice, payout);
+                emit ClosePosition(
+                    positionId,
+                    msg.sender,
+                    currentPrice,
+                    payout
+                );
                 return;
             }
         }

@@ -789,22 +789,37 @@ abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
 // src/PerpDex.sol
 
 contract PerpDEX {
-    IPyth public pyth;
-    ERC20 public usdt;
-    uint256 public constant MAINTENANCE_MARGIN_RATIO = 5e16; // 0.05 = 5%
-    uint256 public constant PRECISION = 1e18;
-    uint256 public constant FEE_RATIO = 1e15; // 0.001 = 0.1%
+    IPyth public immutable pyth;
+    ERC20 public immutable usdt;
 
-    constructor(address _usdt, address _pyth) {
-        usdt = ERC20(_usdt);
-        pyth = IPyth(_pyth);
+    // ---------- Ownership ----------
+    address public owner;
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not admin");
+        _;
     }
 
+    // ---------- Fixed-point base ----------
+    uint256 public constant ONE = 1e18;
+
+    // ---------- Economic Params ----------
+    uint256 public constant FEE_RATIO = 5e14; // 0.05% (scaled by 1e18)
+    uint256 public constant SPREAD_BPS = 5; // 5 bps = 0.05%
+    uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
+    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
+
+    // Funding cap: max 1% per day
+    uint256 public constant MAX_DAILY_FUNDING_BPS = 100;
+    uint256 public constant FUNDING_MAX_PER_SEC =
+        ((ONE * MAX_DAILY_FUNDING_BPS) / 10000) / 86400;
+
+    // ---------- Data Models ----------
     struct Position {
         bytes32 id;
         string pairs;
         bool isLong;
         uint256 margin;
+        uint256 leverage;
         uint256 size;
         uint256 entryPrice;
         bytes32 pythTokenId;
@@ -812,161 +827,432 @@ contract PerpDEX {
         uint256 closePrice;
         uint256 payout;
         uint256 liquidationPrice;
-        uint256 positionFees;
+        uint256 fees;
+        int256 fundingEntry;
     }
 
-    mapping(address => Position[]) public positions;
+    struct PairFunding {
+        uint256 oiLong;
+        uint256 oiShort;
+        int256 growth;
+        uint256 lastUpdate;
+    }
 
+    struct PairInfo {
+        string name;
+        bytes32 pythTokenId;
+        bool active;
+    }
+
+    // ---------- Storage ----------
+    mapping(address => Position[]) public positions;
+    mapping(address => string) public username;
+
+    mapping(bytes32 => PairFunding) public pairFunding;
+    mapping(bytes32 => PairInfo) public pairInfo;
+    PairInfo[] public allPairs; // ✅ store all pairs
+    address[] public allUsers;
+
+    // ---------- Events ----------
     event OpenPosition(
         bytes32 indexed id,
+        address indexed user,
         string pairs,
         bool isLong,
         uint256 margin,
+        uint256 leverage,
         uint256 size,
         uint256 entryPrice,
         bytes32 pythTokenId,
-        bool isClosed,
-        address userAddress,
-        uint256 blockNumber,
-        uint256 blockTimeStamp,
         uint256 liquidationPrice,
-        uint256 positionFees
+        uint256 fees
     );
+    event ClosePosition(
+        bytes32 indexed id,
+        address indexed user,
+        uint256 closePrice,
+        uint256 payout
+    );
+    event RegisterUser(address indexed userAddress, string username);
+    event LiquidatePosition(
+        address indexed liquidator,
+        address indexed user,
+        bytes32 positionId,
+        uint256 closePrice,
+        uint256 reward
+    );
+    event FundingUpdated(
+        string pairs,
+        bytes32 pairKey,
+        int256 newGrowth,
+        uint256 oiLong,
+        uint256 oiShort,
+        uint256 timestamp
+    );
+    event PairAdded(bytes32 indexed pairKey, string name, bytes32 pythTokenId);
+    event PairStatus(bytes32 indexed pairKey, bool active);
+    event OwnershipTransferred(
+        address indexed oldOwner,
+        address indexed newOwner
+    );
+    event AllPositionsClosed(address indexed admin, uint256 timestamp);
 
-    event ClosePosition(bytes32 indexed id, uint256 closePrice, uint256 payout);
+    // ---------- Constructor ----------
+    constructor(address _usdt, address _pyth) {
+        require(_usdt != address(0) && _pyth != address(0), "Invalid address");
+        usdt = ERC20(_usdt);
+        pyth = IPyth(_pyth);
+        owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
 
+        // ✅ Initialize default pairs on deployment
+        _addInitialPairs();
+    }
+
+    // ---------- Internal: Add initial pairs ----------
+    function _addInitialPairs() internal {
+        addPairInternal(
+            "BTC/USD",
+            0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
+        );
+        addPairInternal(
+            "ETH/USD",
+            0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace
+        );
+        addPairInternal(
+            "SOL/USD",
+            0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
+        );
+    }
+
+    function addPairInternal(
+        string memory pairs,
+        bytes32 pythTokenId
+    ) internal {
+        bytes32 key = _pairKey(pairs);
+        pairInfo[key] = PairInfo({
+            name: pairs,
+            pythTokenId: pythTokenId,
+            active: true
+        });
+        allPairs.push(pairInfo[key]);
+        emit PairAdded(key, pairs, pythTokenId);
+        emit PairStatus(key, true);
+    }
+
+    // ========== Admin: Add Pairs Batch ==========
+    function addPairBatch(
+        string[] calldata names,
+        bytes32[] calldata pythTokenIds
+    ) external onlyOwner {
+        require(names.length == pythTokenIds.length, "Array length mismatch");
+        for (uint256 i = 0; i < names.length; i++) {
+            bytes32 key = _pairKey(names[i]);
+            require(!pairInfo[key].active, "Pair exists");
+            pairInfo[key] = PairInfo({
+                name: names[i],
+                pythTokenId: pythTokenIds[i],
+                active: true
+            });
+            allPairs.push(pairInfo[key]);
+            emit PairAdded(key, names[i], pythTokenIds[i]);
+            emit PairStatus(key, true);
+        }
+    }
+
+    // ========== Admin: Pairs ==========
+    function addPair(
+        string calldata pairs,
+        bytes32 pythTokenId
+    ) external onlyOwner {
+        bytes32 key = _pairKey(pairs);
+        require(!pairInfo[key].active, "Pair exists");
+        pairInfo[key] = PairInfo({
+            name: pairs,
+            pythTokenId: pythTokenId,
+            active: true
+        });
+        allPairs.push(pairInfo[key]);
+        emit PairAdded(key, pairs, pythTokenId);
+        emit PairStatus(key, true);
+    }
+
+    function setPairActive(
+        string calldata pairs,
+        bool active
+    ) external onlyOwner {
+        bytes32 key = _pairKey(pairs);
+        require(bytes(pairInfo[key].name).length != 0, "Pair unknown");
+        pairInfo[key].active = active;
+        emit PairStatus(key, active);
+    }
+
+    // ✅ View all pairs
+    function getAllPairs() external view returns (PairInfo[] memory) {
+        return allPairs;
+    }
+
+    // ========== Ownership ==========
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Bad owner");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    // ========== Users ==========
+    function registerUser(string calldata _username) external {
+        require(bytes(_username).length > 0, "Empty username");
+        if (bytes(username[msg.sender]).length == 0) {
+            allUsers.push(msg.sender);
+        }
+        username[msg.sender] = _username;
+        emit RegisterUser(msg.sender, _username);
+    }
+
+    // ========== Funding maintenance ==========
+    function updateFunding(string calldata pairs) public {
+        bytes32 key = _pairKey(pairs);
+        _accrueFunding(key);
+        PairFunding storage pf = pairFunding[key];
+        emit FundingUpdated(
+            pairs,
+            key,
+            pf.growth,
+            pf.oiLong,
+            pf.oiShort,
+            block.timestamp
+        );
+    }
+
+    // ========== Open ==========
     function openPosition(
-        string calldata _pairs,
-        bool _isLong,
-        uint256 _margin,
-        uint256 _size,
-        bytes32 _pythTokenId
+        string calldata pairs,
+        bool isLong,
+        uint256 margin,
+        uint256 leverage
     ) external {
-        require(_margin > 0 && _size > 0);
+        require(margin > 0 && leverage > 0, "Bad margin/leverage");
+        bytes32 key = _pairKey(pairs);
+        PairInfo storage info = pairInfo[key];
+        require(info.active, "Pair not supported");
+
         require(
-            usdt.transferFrom(msg.sender, address(this), _margin),
-            "USDT transfer failed"
+            usdt.transferFrom(msg.sender, address(this), margin),
+            "USDT pull failed"
         );
 
-        uint256 fee = (_margin * FEE_RATIO) / 1e18;
-        uint256 netMargin = _margin - fee;
-        uint256 netSize = netMargin * (_size / _margin);
+        uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
+        uint256 netMargin = margin - fees;
+        uint256 netSize = netMargin * leverage;
 
-        PythStructs.Price memory token = pyth.getPrice(_pythTokenId);
+        _finalizeOpenPosition(
+            pairs,
+            isLong,
+            netMargin,
+            leverage,
+            netSize,
+            info.pythTokenId,
+            fees
+        );
+    }
+
+    function _finalizeOpenPosition(
+        string calldata pairs,
+        bool isLong,
+        uint256 netMargin,
+        uint256 leverage,
+        uint256 netSize,
+        bytes32 pythTokenId,
+        uint256 fees
+    ) internal {
+        bytes32 key = _pairKey(pairs);
+        _accrueFunding(key);
+
+        PythStructs.Price memory token = pyth.getPrice(pythTokenId);
         require(token.price > 0, "Invalid price");
-
-        uint256 entryPrice = toUint(token.price);
+        uint256 oraclePrice = toUint(token.price);
+        uint256 entryPrice = applySpread(oraclePrice, isLong, true);
         uint256 liquidationPrice = calculateLiquidationPrice(
             entryPrice,
             netSize,
             netMargin,
-            _isLong
+            isLong
         );
+
         bytes32 id = keccak256(
             abi.encodePacked(msg.sender, block.timestamp, block.number)
         );
-
-        uint256 maintenanceMargin = (netSize * MAINTENANCE_MARGIN_RATIO) /
-            PRECISION;
-        require(netMargin > maintenanceMargin, "Margin below required minimum");
+        PairFunding storage pf = pairFunding[key];
 
         positions[msg.sender].push(
-            Position(
-                id,
-                _pairs,
-                _isLong,
-                netMargin,
-                netSize,
-                entryPrice,
-                _pythTokenId,
-                false,
-                0,
-                0,
-                liquidationPrice,
-                fee
-            )
+            Position({
+                id: id,
+                pairs: pairs,
+                isLong: isLong,
+                margin: netMargin,
+                leverage: leverage,
+                size: netSize,
+                entryPrice: entryPrice,
+                pythTokenId: pythTokenId,
+                isClosed: false,
+                closePrice: 0,
+                payout: 0,
+                liquidationPrice: liquidationPrice,
+                fees: fees,
+                fundingEntry: pf.growth
+            })
         );
+
+        if (isLong) pf.oiLong += netSize;
+        else pf.oiShort += netSize;
 
         emit OpenPosition(
             id,
-            _pairs,
-            _isLong,
+            msg.sender,
+            pairs,
+            isLong,
             netMargin,
+            leverage,
             netSize,
             entryPrice,
-            _pythTokenId,
-            false,
-            msg.sender,
-            block.number,
-            block.timestamp,
+            pythTokenId,
             liquidationPrice,
-            fee
+            fees
         );
     }
 
-    function closePosition(bytes32 _positionId) external {
+    // ========== Close ==========
+    function closePosition(bytes32 positionId) external {
         Position[] storage userPositions = positions[msg.sender];
         uint256 len = userPositions.length;
-
         for (uint256 i = 0; i < len; i++) {
             Position storage pos = userPositions[i];
-
-            if (!pos.isClosed && pos.id == _positionId) {
-                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-                require(token.price > 0, "Invalid price");
-
-                uint256 currentPrice = toUint(token.price);
-                uint256 pnl;
-
-                if (pos.isLong) {
-                    pnl =
-                        (pos.size * (currentPrice - pos.entryPrice)) /
-                        pos.entryPrice;
-                } else {
-                    pnl =
-                        (pos.size * (pos.entryPrice - currentPrice)) /
-                        pos.entryPrice;
-                }
-
-                uint256 payout = pos.margin + pnl;
-                require(
-                    usdt.transfer(msg.sender, payout),
-                    "USDT payout failed"
-                );
-
-                pos.isClosed = true;
-
-                emit ClosePosition(_positionId, currentPrice, payout);
+            if (!pos.isClosed && pos.id == positionId) {
+                _closePosition(msg.sender, pos);
                 return;
             }
         }
-
-        revert("Position not found or already closed");
+        revert("Position not found/already closed");
     }
 
+    // ========== Admin: Close All Positions ==========
+    function closeAllPositions() external onlyOwner {
+        for (uint256 u = 0; u < allUsers.length; u++) {
+            address user = allUsers[u];
+            Position[] storage userPositions = positions[user];
+            uint256 len = userPositions.length;
+            for (uint256 i = 0; i < len; i++) {
+                Position storage pos = userPositions[i];
+                if (!pos.isClosed) {
+                    _closePosition(user, pos);
+                }
+            }
+        }
+        emit AllPositionsClosed(msg.sender, block.timestamp);
+    }
+
+    // ========== Internal close flow ==========
+    function _closePosition(address user, Position storage pos) internal {
+        bytes32 key = _pairKey(pos.pairs);
+        _accrueFunding(key);
+
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
+        uint256 oraclePrice = toUint(token.price);
+        uint256 currentPrice = applySpread(oraclePrice, pos.isLong, false);
+
+        int256 pnl;
+        if (pos.isLong) {
+            pnl =
+                (int256(pos.size) *
+                    (int256(currentPrice) - int256(pos.entryPrice))) /
+                int256(pos.entryPrice);
+        } else {
+            pnl =
+                (int256(pos.size) *
+                    (int256(pos.entryPrice) - int256(currentPrice))) /
+                int256(pos.entryPrice);
+        }
+
+        PairFunding storage pf = pairFunding[key];
+        int256 fundingPayment = (int256(pos.size) *
+            (pf.growth - pos.fundingEntry)) / int256(ONE);
+
+        int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
+        uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
+
+        if (pos.isLong)
+            pf.oiLong = pf.oiLong >= pos.size ? pf.oiLong - pos.size : 0;
+        else pf.oiShort = pf.oiShort >= pos.size ? pf.oiShort - pos.size : 0;
+
+        if (payout > 0) usdt.transfer(user, payout);
+
+        pos.isClosed = true;
+        pos.closePrice = currentPrice;
+        pos.payout = payout;
+
+        emit ClosePosition(pos.id, user, currentPrice, payout);
+    }
+
+    // ========== Funding internals ==========
+    function _accrueFunding(bytes32 key) internal {
+        PairFunding storage pf = pairFunding[key];
+        uint256 last = pf.lastUpdate;
+        if (last == 0) {
+            pf.lastUpdate = block.timestamp;
+            return;
+        }
+
+        uint256 dt = block.timestamp - last;
+        if (dt == 0) return;
+
+        uint256 longOI = pf.oiLong;
+        uint256 shortOI = pf.oiShort;
+        uint256 totalOI = longOI + shortOI;
+        if (totalOI == 0) {
+            pf.lastUpdate = block.timestamp;
+            return;
+        }
+
+        uint256 diff = longOI > shortOI
+            ? (longOI - shortOI)
+            : (shortOI - longOI);
+        uint256 imbalanceRatio = (diff * ONE) / totalOI;
+        uint256 magPerSec = (FUNDING_MAX_PER_SEC * imbalanceRatio) / ONE;
+        int256 signedPerSec = longOI >= shortOI
+            ? int256(magPerSec)
+            : -int256(magPerSec);
+
+        int256 incr = signedPerSec * int256(dt);
+        pf.growth += incr;
+        pf.lastUpdate = block.timestamp;
+    }
+
+    // ========== Helpers ==========
     function calculateLiquidationPrice(
         uint256 entryPrice,
         uint256 size,
         uint256 margin,
         bool isLong
     ) internal pure returns (uint256) {
-        uint256 maintenanceMargin = (size * MAINTENANCE_MARGIN_RATIO) /
-            PRECISION;
+        uint256 maintMargin = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
+        uint256 effectiveMargin = margin - maintMargin;
+        uint256 priceChange = (entryPrice * effectiveMargin) / size;
+        return isLong ? entryPrice - priceChange : entryPrice + priceChange;
+    }
 
-        require(
-            margin > maintenanceMargin,
-            "Margin too low for liquidation calc"
-        );
+    function applySpread(
+        uint256 price,
+        bool isLong,
+        bool isEntry
+    ) internal pure returns (uint256) {
+        uint256 spread = (price * SPREAD_BPS) / 10000;
+        if (isEntry) return isLong ? price + spread : price - spread;
+        return isLong ? price - spread : price + spread;
+    }
 
-        uint256 maxLoss = margin - maintenanceMargin;
-        uint256 lossRatio = (maxLoss * PRECISION) / size;
-        uint256 priceChange = (entryPrice * lossRatio) / PRECISION;
-
-        if (isLong) {
-            return entryPrice - priceChange;
-        } else {
-            return entryPrice + priceChange;
-        }
+    function _pairKey(string memory pairs) internal pure returns (bytes32) {
+        return keccak256(bytes(pairs));
     }
 
     function toUint(int64 x) internal pure returns (uint256) {

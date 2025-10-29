@@ -1,11 +1,9 @@
 Deploy Command (Monad)
 forge script script/MockUSDT.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
-forge script script/User.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
 forge script script/PerpDex.s.sol:PerpDexScript --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID --broadcast
 
 Flatten Command 
 forge flatten src/MockUSDT.sol > flatten/FlattenedMockUSDT.sol
-forge flatten src/User.sol > flatten/FlattenedUser.sol
 forge flatten src/PerpDex.sol > flatten/FlattenedPerpDex.sol
 
 Verify Command (Monad)
@@ -15,5 +13,5 @@ forge verify-contract \
   --rpc-url https://testnet-rpc.monad.xyz \
   --verifier sourcify \
   --verifier-url 'https://sourcify-api-monad.blockvision.org' \
-  0x30d8F153C37d908DcE819A13915A6EC097B3c26D \
+  0xA48e9c1F4234270c6428C4c380ADA00A4FBFb252 \
   src/PerpDex.sol:PerpDEX

@@ -45,6 +45,9 @@ contract PerpDEX {
         uint256 liquidationPrice;
         uint256 fees;
         int256 fundingEntry;
+        // ✅ TP/SL
+        uint256 takeProfit; // 0 = unset
+        uint256 stopLoss; // 0 = unset
     }
 
     struct PairFunding {
@@ -105,6 +108,27 @@ contract PerpDEX {
         address indexed newOwner
     );
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
+
+    // ✅ TP/SL events
+    event TpSlSet(
+        address indexed user,
+        bytes32 indexed positionId,
+        uint256 takeProfit,
+        uint256 stopLoss
+    );
+    event TpSlCleared(
+        address indexed user,
+        bytes32 indexed positionId,
+        bool clearedTp,
+        bool clearedSl
+    );
+    event TpSlTriggered(
+        address indexed keeper,
+        address indexed user,
+        bytes32 indexed positionId,
+        string triggerType, // "TP" or "SL"
+        uint256 triggerPrice
+    );
 
     // ---------- Constructor ----------
     constructor(address _usdt, address _pyth) {
@@ -325,7 +349,9 @@ contract PerpDEX {
                 payout: 0,
                 liquidationPrice: liquidationPrice,
                 fees: fees,
-                fundingEntry: pf.growth
+                fundingEntry: pf.growth,
+                takeProfit: 0,
+                stopLoss: 0
             })
         );
 
@@ -410,6 +436,111 @@ contract PerpDEX {
             }
         }
         emit AllPositionsClosed(msg.sender, block.timestamp);
+    }
+
+    // ---------- TP/SL: Set / Clear / Trigger ----------
+
+    /// @notice Set or update TP and/or SL (absolute prices). Pass 0 to leave a field unchanged.
+    function setTpSl(
+        bytes32 positionId,
+        uint256 newTp,
+        uint256 newSl
+    ) external {
+        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+
+        // Validate against entry side
+        if (newTp > 0) {
+            if (pos.isLong)
+                require(newTp > pos.entryPrice, "TP must be > entry");
+            else require(newTp < pos.entryPrice, "TP must be < entry");
+            pos.takeProfit = newTp;
+        }
+        if (newSl > 0) {
+            if (pos.isLong)
+                require(newSl < pos.entryPrice, "SL must be < entry");
+            else require(newSl > pos.entryPrice, "SL must be > entry");
+            pos.stopLoss = newSl;
+        }
+
+        emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
+    }
+
+    /// @notice Clear TP and/or SL flags independently.
+    function clearTpSl(
+        bytes32 positionId,
+        bool clearTp,
+        bool clearSl
+    ) external {
+        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+
+        bool didTp;
+        bool didSl;
+        if (clearTp && pos.takeProfit != 0) {
+            pos.takeProfit = 0;
+            didTp = true;
+        }
+        if (clearSl && pos.stopLoss != 0) {
+            pos.stopLoss = 0;
+            didSl = true;
+        }
+        require(didTp || didSl, "Nothing to clear");
+
+        emit TpSlCleared(msg.sender, positionId, didTp, didSl);
+    }
+
+    /// @notice Keeper/bot callable: checks price and closes position if TP/SL reached.
+    /// @dev TP has priority if both conditions are true on the same tick.
+    function triggerTpSl(address user, bytes32 positionId) external {
+        Position storage pos = _getOpenPositionOf(user, positionId);
+
+        // Pull price (no spread on close)
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
+        uint256 mark = toUint(token.price);
+
+        (bool shouldClose, string memory which) = _shouldTrigger(pos, mark);
+        require(shouldClose, "No trigger");
+
+        // close & emit extra trigger event
+        _closePosition(user, pos);
+        emit TpSlTriggered(msg.sender, user, positionId, which, mark);
+    }
+
+    function _shouldTrigger(
+        Position storage pos,
+        uint256 mark
+    ) internal view returns (bool ok, string memory which) {
+        // Long: TP if mark >= TP, SL if mark <= SL
+        // Short: TP if mark <= TP, SL if mark >= SL
+        if (pos.isLong) {
+            if (pos.takeProfit != 0 && mark >= pos.takeProfit) {
+                return (true, "TP");
+            }
+            if (pos.stopLoss != 0 && mark <= pos.stopLoss) {
+                return (true, "SL");
+            }
+        } else {
+            if (pos.takeProfit != 0 && mark <= pos.takeProfit) {
+                return (true, "TP");
+            }
+            if (pos.stopLoss != 0 && mark >= pos.stopLoss) {
+                return (true, "SL");
+            }
+        }
+        return (false, "");
+    }
+
+    function _getOpenPositionOf(
+        address user,
+        bytes32 positionId
+    ) internal view returns (Position storage) {
+        Position[] storage arr = positions[user];
+        for (uint256 i = 0; i < arr.length; i++) {
+            if (!arr[i].isClosed && arr[i].id == positionId) {
+                return arr[i];
+            }
+        }
+        revert("Position not found/already closed");
     }
 
     // ---------- Helpers ----------

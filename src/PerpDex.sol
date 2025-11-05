@@ -23,8 +23,7 @@ contract PerpDEX {
     uint256 public constant FEE_RATIO = 5e14; // 0.05%
     uint256 public constant SPREAD_BPS = 5; // 0.05%
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
-    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
-
+    // NOTE: LIQUIDATION_REWARD_RATIO intentionally unused (no keeper reward)
     uint256 public constant MAX_DAILY_FUNDING_BPS = 100; // 1% per day
     uint256 public constant FUNDING_MAX_PER_SEC =
         ((ONE * MAX_DAILY_FUNDING_BPS) / 10000) / 86400;
@@ -45,9 +44,9 @@ contract PerpDEX {
         uint256 liquidationPrice;
         uint256 fees;
         int256 fundingEntry;
-        // ✅ TP/SL
-        uint256 takeProfit; // 0 = unset
-        uint256 stopLoss; // 0 = unset
+        // TP/SL (absolute prices; 0 = unset)
+        uint256 takeProfit;
+        uint256 stopLoss;
     }
 
     struct PairFunding {
@@ -108,8 +107,6 @@ contract PerpDEX {
         address indexed newOwner
     );
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
-
-    // ✅ TP/SL events
     event TpSlSet(
         address indexed user,
         bytes32 indexed positionId,
@@ -126,8 +123,18 @@ contract PerpDEX {
         address indexed keeper,
         address indexed user,
         bytes32 indexed positionId,
-        string triggerType, // "TP" or "SL"
+        string triggerType,
         uint256 triggerPrice
+    );
+
+    // ✅ Dedicated liquidation event for backend tracking
+    event Liquidated(
+        address indexed keeper,
+        address indexed user,
+        bytes32 indexed positionId,
+        string pairs,
+        uint256 markPrice,
+        uint256 timestamp
     );
 
     // ---------- Constructor ----------
@@ -385,13 +392,12 @@ contract PerpDEX {
         revert("Position not found/already closed");
     }
 
-    // ✅ Modified Close (no spread + fee on close)
     function _closePosition(address user, Position storage pos) internal {
         _accrueFunding(pos.pairs);
 
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
         require(token.price > 0, "Invalid price");
-        uint256 currentPrice = toUint(token.price); // ✅ No spread
+        uint256 currentPrice = toUint(token.price);
 
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
@@ -408,7 +414,6 @@ contract PerpDEX {
         int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        // ✅ Apply close fee (same as FEE_RATIO)
         uint256 closeFee = (payout * FEE_RATIO) / ONE;
         payout = payout > closeFee ? payout - closeFee : 0;
 
@@ -425,6 +430,70 @@ contract PerpDEX {
         emit ClosePosition(pos.id, user, currentPrice, payout, closeFee);
     }
 
+    // ---------- Liquidation (no keeper reward) ----------
+    function liquidatePosition(address user, bytes32 positionId) external {
+        Position[] storage userPositions = positions[user];
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+            if (!pos.isClosed && pos.id == positionId) {
+                _accrueFunding(pos.pairs);
+
+                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+                require(token.price > 0, "Invalid price");
+                uint256 mark = toUint(token.price);
+
+                bool canLiquidate = pos.isLong
+                    ? mark <= pos.liquidationPrice
+                    : mark >= pos.liquidationPrice;
+                require(canLiquidate, "Not liquidatable");
+
+                PairFunding storage pf = pairFunding[pos.pairs];
+                int256 fundingPayment = (int256(pos.size) *
+                    (pf.growth - pos.fundingEntry)) / int256(ONE);
+
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) *
+                        (int256(mark) - int256(pos.entryPrice))) /
+                        int256(pos.entryPrice)
+                    : (int256(pos.size) *
+                        (int256(pos.entryPrice) - int256(mark))) /
+                        int256(pos.entryPrice);
+
+                int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
+                uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
+
+                // No keeper reward; all positive payout returns to the trader
+                if (payout > 0) usdt.transfer(user, payout);
+
+                if (pos.isLong)
+                    pf.oiLong = pf.oiLong >= pos.size
+                        ? pf.oiLong - pos.size
+                        : 0;
+                else
+                    pf.oiShort = pf.oiShort >= pos.size
+                        ? pf.oiShort - pos.size
+                        : 0;
+
+                pos.isClosed = true;
+                pos.closePrice = mark;
+                pos.payout = payout;
+
+                // closeFee = 0 for liquidation path
+                emit ClosePosition(pos.id, user, mark, payout, 0);
+                emit Liquidated(
+                    msg.sender,
+                    user,
+                    positionId,
+                    pos.pairs,
+                    mark,
+                    block.timestamp
+                );
+                return;
+            }
+        }
+        revert("Position not found/already closed");
+    }
+
     // ---------- Admin Close All ----------
     function closeAllPositions() external onlyOwner {
         for (uint256 u = 0; u < allUsers.length; u++) {
@@ -438,9 +507,7 @@ contract PerpDEX {
         emit AllPositionsClosed(msg.sender, block.timestamp);
     }
 
-    // ---------- TP/SL: Set / Clear / Trigger ----------
-
-    /// @notice Set or update TP and/or SL (absolute prices). Pass 0 to leave a field unchanged.
+    // ---------- TP/SL ----------
     function setTpSl(
         bytes32 positionId,
         uint256 newTp,
@@ -448,7 +515,6 @@ contract PerpDEX {
     ) external {
         Position storage pos = _getOpenPositionOf(msg.sender, positionId);
 
-        // Validate against entry side
         if (newTp > 0) {
             if (pos.isLong)
                 require(newTp > pos.entryPrice, "TP must be > entry");
@@ -465,7 +531,6 @@ contract PerpDEX {
         emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
     }
 
-    /// @notice Clear TP and/or SL flags independently.
     function clearTpSl(
         bytes32 positionId,
         bool clearTp,
@@ -488,12 +553,9 @@ contract PerpDEX {
         emit TpSlCleared(msg.sender, positionId, didTp, didSl);
     }
 
-    /// @notice Keeper/bot callable: checks price and closes position if TP/SL reached.
-    /// @dev TP has priority if both conditions are true on the same tick.
     function triggerTpSl(address user, bytes32 positionId) external {
         Position storage pos = _getOpenPositionOf(user, positionId);
 
-        // Pull price (no spread on close)
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
         require(token.price > 0, "Invalid price");
         uint256 mark = toUint(token.price);
@@ -501,7 +563,6 @@ contract PerpDEX {
         (bool shouldClose, string memory which) = _shouldTrigger(pos, mark);
         require(shouldClose, "No trigger");
 
-        // close & emit extra trigger event
         _closePosition(user, pos);
         emit TpSlTriggered(msg.sender, user, positionId, which, mark);
     }
@@ -510,22 +571,14 @@ contract PerpDEX {
         Position storage pos,
         uint256 mark
     ) internal view returns (bool ok, string memory which) {
-        // Long: TP if mark >= TP, SL if mark <= SL
-        // Short: TP if mark <= TP, SL if mark >= SL
         if (pos.isLong) {
-            if (pos.takeProfit != 0 && mark >= pos.takeProfit) {
+            if (pos.takeProfit != 0 && mark >= pos.takeProfit)
                 return (true, "TP");
-            }
-            if (pos.stopLoss != 0 && mark <= pos.stopLoss) {
-                return (true, "SL");
-            }
+            if (pos.stopLoss != 0 && mark <= pos.stopLoss) return (true, "SL");
         } else {
-            if (pos.takeProfit != 0 && mark <= pos.takeProfit) {
+            if (pos.takeProfit != 0 && mark <= pos.takeProfit)
                 return (true, "TP");
-            }
-            if (pos.stopLoss != 0 && mark >= pos.stopLoss) {
-                return (true, "SL");
-            }
+            if (pos.stopLoss != 0 && mark >= pos.stopLoss) return (true, "SL");
         }
         return (false, "");
     }
@@ -568,6 +621,6 @@ contract PerpDEX {
 
     function toUint(int64 x) internal pure returns (uint256) {
         require(x >= 0, "Negative price");
-        return uint256(int256(x));
+        return uint256(uint64(x));
     }
 }

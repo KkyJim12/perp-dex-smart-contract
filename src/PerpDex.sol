@@ -29,6 +29,50 @@ contract PerpDEX is ReentrancyGuard {
     event Unstaked(address indexed user, uint256 amount);
     event PoolUpdated(uint256 totalStaked, string reason, int256 pnlImpact);
 
+    // ---------- Usernames ----------
+    mapping(address => string) public usernames;
+    mapping(string => address) public usernameToAddress;
+
+    event UsernameRegistered(address indexed user, string username);
+    event UsernameChanged(
+        address indexed user,
+        string oldUsername,
+        string newUsername
+    );
+
+    function registerUsername(string calldata name) external {
+        require(
+            bytes(name).length >= 3 && bytes(name).length <= 32,
+            "Bad length"
+        );
+        require(bytes(usernames[msg.sender]).length == 0, "Already registered");
+        require(usernameToAddress[name] == address(0), "Name taken");
+
+        usernames[msg.sender] = name;
+        usernameToAddress[name] = msg.sender;
+
+        emit UsernameRegistered(msg.sender, name);
+    }
+
+    function changeUsername(string calldata newName) external {
+        string memory current = usernames[msg.sender];
+        require(bytes(current).length > 0, "Not registered");
+        require(
+            bytes(newName).length >= 3 && bytes(newName).length <= 32,
+            "Bad length"
+        );
+        require(usernameToAddress[newName] == address(0), "Name taken");
+
+        // Release old name
+        delete usernameToAddress[current];
+
+        // Assign new name
+        usernames[msg.sender] = newName;
+        usernameToAddress[newName] = msg.sender;
+
+        emit UsernameChanged(msg.sender, current, newName);
+    }
+
     // ---------- Data ----------
     struct Position {
         bytes32 id;
@@ -62,7 +106,6 @@ contract PerpDEX is ReentrancyGuard {
         bool active;
     }
 
-    // ---------- Storage ----------
     mapping(address => Position[]) public positions;
     mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
@@ -80,7 +123,9 @@ contract PerpDEX is ReentrancyGuard {
         uint256 entryPrice,
         bytes32 pythTokenId,
         uint256 liquidationPrice,
-        uint256 fees
+        uint256 fees,
+        uint256 takeProfit,
+        uint256 stopLoss
     );
     event ClosePosition(
         bytes32 indexed id,
@@ -144,22 +189,6 @@ contract PerpDEX is ReentrancyGuard {
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
-        addPairInternal(
-            "HYPE_USD",
-            0x9ff5a5b3b76e62ab1452a65b0421d48a692f6a3d0d0970c8e1f9825a12b2b2cc
-        );
-        addPairInternal(
-            "XRP_USD",
-            0x2f17f49c4eae5b8af67b0aaf76e95a85c3984ecf4de8b4d54d3626455cfd0dc3
-        );
-        addPairInternal(
-            "ZRO_USD",
-            0x8968f2c9bfae7cb9a531fb9f84d2cf2e9d89e3f4a45b15b18a2b8afc573dc23e
-        );
-        addPairInternal(
-            "DOGE_USD",
-            0x971e9b5a0c09b6b8a38e05eec346d4c2c9a017781ae3a1f3bda14e9a25d20f64
-        );
     }
 
     function addPairInternal(
@@ -189,7 +218,7 @@ contract PerpDEX is ReentrancyGuard {
         emit Unstaked(msg.sender, amount);
     }
 
-    // ---------- Core: Pool PnL Integration ----------
+    // ---------- Core: Pool PnL ----------
     function _applyPnLToPool(int256 pnl) internal {
         if (pnl > 0) {
             uint256 loss = uint256(pnl);
@@ -208,7 +237,9 @@ contract PerpDEX is ReentrancyGuard {
         string calldata pairs,
         bool isLong,
         uint256 margin,
-        uint256 leverage
+        uint256 leverage,
+        uint256 takeProfit,
+        uint256 stopLoss
     ) external nonReentrant {
         require(margin > 0 && leverage > 0, "Bad params");
         PairInfo storage info = pairInfo[pairs];
@@ -252,8 +283,8 @@ contract PerpDEX is ReentrancyGuard {
                 liquidationPrice: liq,
                 fees: fees,
                 fundingEntry: pf.growth,
-                takeProfit: 0,
-                stopLoss: 0
+                takeProfit: takeProfit,
+                stopLoss: stopLoss
             })
         );
 
@@ -271,7 +302,47 @@ contract PerpDEX is ReentrancyGuard {
             entryPrice,
             info.pythTokenId,
             liq,
-            fees
+            fees,
+            takeProfit,
+            stopLoss
+        );
+    }
+
+    // ---------- Close Position ----------
+    function closePosition(bytes32 positionId) external nonReentrant {
+        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        uint256 mark = _toUintPrice1e8(token);
+
+        uint256 closePrice = mark; // no spread
+        int256 pnl = pos.isLong
+            ? (int256(pos.size) *
+                (int256(closePrice) - int256(pos.entryPrice))) /
+                int256(pos.entryPrice)
+            : (int256(pos.size) *
+                (int256(pos.entryPrice) - int256(closePrice))) /
+                int256(pos.entryPrice);
+
+        int256 rawPayout = int256(pos.margin) + pnl;
+        if (rawPayout < 0) rawPayout = 0;
+
+        uint256 payout = uint256(rawPayout);
+        uint256 closeFee = (payout * FEE_RATIO) / ONE;
+        uint256 netPayout = payout - closeFee;
+
+        _applyPnLToPool(pnl);
+        usdt.safeTransfer(msg.sender, netPayout);
+
+        pos.isClosed = true;
+        pos.closePrice = closePrice;
+        pos.payout = netPayout;
+
+        emit ClosePosition(
+            positionId,
+            msg.sender,
+            closePrice,
+            netPayout,
+            closeFee
         );
     }
 
@@ -293,46 +364,6 @@ contract PerpDEX is ReentrancyGuard {
             pos.stopLoss = newSl;
         }
         emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
-    }
-
-    // ---------- Liquidate ----------
-    function liquidate(address user, bytes32 positionId) external nonReentrant {
-        Position storage pos = _getOpenPositionOf(user, positionId);
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        uint256 mark = _toUintPrice1e8(token);
-
-        bool hit = pos.isLong
-            ? mark <= pos.liquidationPrice
-            : mark >= pos.liquidationPrice;
-        require(hit, "Not liquidatable");
-
-        // Compute PnL
-        int256 pnl = pos.isLong
-            ? (int256(pos.size) * (int256(mark) - int256(pos.entryPrice))) /
-                int256(pos.entryPrice)
-            : (int256(pos.size) * (int256(pos.entryPrice) - int256(mark))) /
-                int256(pos.entryPrice);
-
-        int256 rawPayout = int256(pos.margin) + pnl;
-        if (rawPayout < 0) rawPayout = 0;
-
-        uint256 reward = (pos.margin * LIQUIDATION_REWARD_RATIO) / ONE;
-        if (reward > 0) usdt.safeTransfer(msg.sender, reward);
-
-        _applyPnLToPool(pnl);
-
-        pos.isClosed = true;
-        pos.closePrice = mark;
-        pos.payout = 0; // trader gets nothing
-
-        emit Liquidated(
-            msg.sender,
-            user,
-            positionId,
-            pos.pairs,
-            mark,
-            block.timestamp
-        );
     }
 
     // ---------- Helpers ----------
@@ -376,11 +407,8 @@ contract PerpDEX is ReentrancyGuard {
         int256 v = int256(p.price);
         int32 expo = p.expo;
         int32 diff = -8 - expo;
-        if (diff > 0) {
-            for (int32 i; i < diff; i++) v *= 10;
-        } else if (diff < 0) {
-            for (int32 i; i < -diff; i++) v /= 10;
-        }
+        if (diff > 0) for (int32 i; i < diff; i++) v *= 10;
+        else if (diff < 0) for (int32 i; i < -diff; i++) v /= 10;
         return uint256(v);
     }
 }

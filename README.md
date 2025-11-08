@@ -13,5 +13,5 @@ forge verify-contract \
   --rpc-url https://testnet-rpc.monad.xyz \
   --verifier sourcify \
   --verifier-url 'https://sourcify-api-monad.blockvision.org' \
-  0x725AEbeFa6e36d3Df112DDC20FF2bE8F3947D679 \
+  0xe2C7D9c1c24098b735728D32CCF90f9fDf6BC617 \
   src/PerpDex.sol:PerpDEX

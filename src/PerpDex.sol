@@ -19,6 +19,7 @@ contract PerpDEX is ReentrancyGuard {
     uint256 public constant FEE_RATIO = 5e14; // 0.05%
     uint256 public constant SPREAD_BPS = 5; // 0.05%
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
+    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
 
     // ---------- Staking Pool ----------
     uint256 public totalStaked;
@@ -88,6 +89,19 @@ contract PerpDEX is ReentrancyGuard {
         uint256 payout,
         uint256 closeFee
     );
+    event TpSlSet(
+        address indexed user,
+        bytes32 indexed positionId,
+        uint256 takeProfit,
+        uint256 stopLoss
+    );
+    event TpSlTriggered(
+        address indexed keeper,
+        address indexed user,
+        bytes32 indexed positionId,
+        string triggerType,
+        uint256 triggerPrice
+    );
     event Liquidated(
         address indexed keeper,
         address indexed user,
@@ -130,6 +144,22 @@ contract PerpDEX is ReentrancyGuard {
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
+        addPairInternal(
+            "HYPE_USD",
+            0x9ff5a5b3b76e62ab1452a65b0421d48a692f6a3d0d0970c8e1f9825a12b2b2cc
+        );
+        addPairInternal(
+            "XRP_USD",
+            0x2f17f49c4eae5b8af67b0aaf76e95a85c3984ecf4de8b4d54d3626455cfd0dc3
+        );
+        addPairInternal(
+            "ZRO_USD",
+            0x8968f2c9bfae7cb9a531fb9f84d2cf2e9d89e3f4a45b15b18a2b8afc573dc23e
+        );
+        addPairInternal(
+            "DOGE_USD",
+            0x971e9b5a0c09b6b8a38e05eec346d4c2c9a017781ae3a1f3bda14e9a25d20f64
+        );
     }
 
     function addPairInternal(
@@ -161,8 +191,6 @@ contract PerpDEX is ReentrancyGuard {
 
     // ---------- Core: Pool PnL Integration ----------
     function _applyPnLToPool(int256 pnl) internal {
-        // pnl > 0 => trader win => pool pays
-        // pnl < 0 => trader loss => pool gains
         if (pnl > 0) {
             uint256 loss = uint256(pnl);
             require(totalStaked >= loss, "Pool depleted");
@@ -247,59 +275,78 @@ contract PerpDEX is ReentrancyGuard {
         );
     }
 
-    // ---------- Close Position ----------
-    function closePosition(bytes32 positionId) external nonReentrant {
-        Position[] storage userPositions = positions[msg.sender];
-        for (uint256 i; i < userPositions.length; i++) {
-            Position storage pos = userPositions[i];
-            if (!pos.isClosed && pos.id == positionId) {
-                _closePosition(msg.sender, pos);
-                return;
-            }
+    // ---------- TP/SL ----------
+    function setTpSl(
+        bytes32 positionId,
+        uint256 newTp,
+        uint256 newSl
+    ) external nonReentrant {
+        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+        if (newTp > 0) {
+            if (pos.isLong) require(newTp > pos.entryPrice, "TP must > entry");
+            else require(newTp < pos.entryPrice, "TP must < entry");
+            pos.takeProfit = newTp;
         }
-        revert("Position not found");
+        if (newSl > 0) {
+            if (pos.isLong) require(newSl < pos.entryPrice, "SL must < entry");
+            else require(newSl > pos.entryPrice, "SL must > entry");
+            pos.stopLoss = newSl;
+        }
+        emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
     }
 
-    function _closePosition(address user, Position storage pos) internal {
+    // ---------- Liquidate ----------
+    function liquidate(address user, bytes32 positionId) external nonReentrant {
+        Position storage pos = _getOpenPositionOf(user, positionId);
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        require(token.price > 0, "Invalid price");
-        uint256 currentPrice = _toUintPrice1e8(token);
+        uint256 mark = _toUintPrice1e8(token);
 
+        bool hit = pos.isLong
+            ? mark <= pos.liquidationPrice
+            : mark >= pos.liquidationPrice;
+        require(hit, "Not liquidatable");
+
+        // Compute PnL
         int256 pnl = pos.isLong
-            ? (int256(pos.size) *
-                (int256(currentPrice) - int256(pos.entryPrice))) /
+            ? (int256(pos.size) * (int256(mark) - int256(pos.entryPrice))) /
                 int256(pos.entryPrice)
-            : (int256(pos.size) *
-                (int256(pos.entryPrice) - int256(currentPrice))) /
+            : (int256(pos.size) * (int256(pos.entryPrice) - int256(mark))) /
                 int256(pos.entryPrice);
 
-        PairFunding storage pf = pairFunding[pos.pairs];
-        int256 fundingPayment = (int256(pos.size) *
-            (pf.growth - pos.fundingEntry)) / int256(ONE);
-        int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
+        int256 rawPayout = int256(pos.margin) + pnl;
+        if (rawPayout < 0) rawPayout = 0;
 
-        uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
-        uint256 closeFee = (payout * FEE_RATIO) / ONE;
-        payout = payout > closeFee ? payout - closeFee : 0;
+        uint256 reward = (pos.margin * LIQUIDATION_REWARD_RATIO) / ONE;
+        if (reward > 0) usdt.safeTransfer(msg.sender, reward);
 
-        // integrate staking pool PnL
-        int256 netPnL = rawPayout - int256(pos.margin);
-        _applyPnLToPool(netPnL);
-
-        if (pos.isLong)
-            pf.oiLong = pf.oiLong >= pos.size ? pf.oiLong - pos.size : 0;
-        else pf.oiShort = pf.oiShort >= pos.size ? pf.oiShort - pos.size : 0;
-
-        if (payout > 0) usdt.safeTransfer(user, payout);
+        _applyPnLToPool(pnl);
 
         pos.isClosed = true;
-        pos.closePrice = currentPrice;
-        pos.payout = payout;
+        pos.closePrice = mark;
+        pos.payout = 0; // trader gets nothing
 
-        emit ClosePosition(pos.id, user, currentPrice, payout, closeFee);
+        emit Liquidated(
+            msg.sender,
+            user,
+            positionId,
+            pos.pairs,
+            mark,
+            block.timestamp
+        );
     }
 
     // ---------- Helpers ----------
+    function _getOpenPositionOf(
+        address user,
+        bytes32 positionId
+    ) internal view returns (Position storage) {
+        Position[] storage arr = positions[user];
+        for (uint256 i; i < arr.length; i++) {
+            if (!arr[i].isClosed && arr[i].id == positionId) return arr[i];
+        }
+        revert("Position not found/already closed");
+    }
+
     function applySpread(
         uint256 price,
         bool isLong,

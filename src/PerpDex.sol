@@ -250,11 +250,29 @@ contract PerpDEX is ReentrancyGuard {
         uint256 netMargin = margin - fees;
         uint256 netSize = netMargin * leverage;
 
+        // ---------- 1️⃣ Get current oracle price ----------
         PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
         require(token.price > 0, "Invalid price");
-
         uint256 oraclePrice = _toUintPrice1e8(token);
         uint256 entryPrice = applySpread(oraclePrice, isLong, true);
+
+        // ---------- 2️⃣ Validate TP/SL vs current oracle ----------
+        if (takeProfit > 0) {
+            if (isLong) {
+                require(takeProfit > oraclePrice, "Invalid Long TP");
+            } else {
+                require(takeProfit < oraclePrice, "Invalid Short TP");
+            }
+        }
+        if (stopLoss > 0) {
+            if (isLong) {
+                require(stopLoss < oraclePrice, "Invalid Long SL");
+            } else {
+                require(stopLoss > oraclePrice, "Invalid Short SL");
+            }
+        }
+
+        // ---------- 3️⃣ Calculate liquidation price ----------
         uint256 liq = calculateLiquidationPrice(
             entryPrice,
             netSize,
@@ -346,24 +364,185 @@ contract PerpDEX is ReentrancyGuard {
         );
     }
 
-    // ---------- TP/SL ----------
     function setTpSl(
         bytes32 positionId,
         uint256 newTp,
         uint256 newSl
     ) external nonReentrant {
         Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+        require(!pos.isClosed, "Position closed");
+
+        // ---------- 1️⃣ Get latest Pyth oracle price ----------
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        uint256 currentPrice = _toUintPrice1e8(token);
+        require(currentPrice > 0, "Invalid oracle price");
+
+        // ---------- 2️⃣ Validate take profit ----------
         if (newTp > 0) {
-            if (pos.isLong) require(newTp > pos.entryPrice, "TP must > entry");
-            else require(newTp < pos.entryPrice, "TP must < entry");
+            if (pos.isLong) {
+                require(
+                    newTp > currentPrice,
+                    "Long TP must be above current price"
+                );
+            } else {
+                require(
+                    newTp < currentPrice,
+                    "Short TP must be below current price"
+                );
+            }
             pos.takeProfit = newTp;
         }
+
+        // ---------- 3️⃣ Validate stop loss ----------
         if (newSl > 0) {
-            if (pos.isLong) require(newSl < pos.entryPrice, "SL must < entry");
-            else require(newSl > pos.entryPrice, "SL must > entry");
+            if (pos.isLong) {
+                require(
+                    newSl < currentPrice,
+                    "Long SL must be below current price"
+                );
+            } else {
+                require(
+                    newSl > currentPrice,
+                    "Short SL must be above current price"
+                );
+            }
             pos.stopLoss = newSl;
         }
+
+        // ---------- 4️⃣ Emit event ----------
         emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
+    }
+
+    function triggerTpSl(
+        address user,
+        bytes32 positionId
+    ) external nonReentrant {
+        Position storage pos = _getOpenPositionOf(user, positionId);
+        require(!pos.isClosed, "Already closed");
+
+        // ---------- 1️⃣ Get latest oracle price ----------
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        uint256 mark = _toUintPrice1e8(token);
+
+        bool hitTp = false;
+        bool hitSl = false;
+        uint256 triggerPrice = 0;
+        string memory triggerType;
+
+        if (pos.isLong) {
+            if (pos.takeProfit > 0 && mark >= pos.takeProfit) {
+                hitTp = true;
+                triggerPrice = pos.takeProfit;
+                triggerType = "TakeProfit";
+            } else if (pos.stopLoss > 0 && mark <= pos.stopLoss) {
+                hitSl = true;
+                triggerPrice = pos.stopLoss;
+                triggerType = "StopLoss";
+            }
+        } else {
+            if (pos.takeProfit > 0 && mark <= pos.takeProfit) {
+                hitTp = true;
+                triggerPrice = pos.takeProfit;
+                triggerType = "TakeProfit";
+            } else if (pos.stopLoss > 0 && mark >= pos.stopLoss) {
+                hitSl = true;
+                triggerPrice = pos.stopLoss;
+                triggerType = "StopLoss";
+            }
+        }
+
+        require(hitTp || hitSl, "No TP/SL hit");
+
+        // ---------- 2️⃣ Calculate PnL based on *exact TP/SL price* ----------
+        uint256 closePrice = triggerPrice; // Use the exact target price
+        int256 pnl = pos.isLong
+            ? (int256(pos.size) *
+                (int256(closePrice) - int256(pos.entryPrice))) /
+                int256(pos.entryPrice)
+            : (int256(pos.size) *
+                (int256(pos.entryPrice) - int256(closePrice))) /
+                int256(pos.entryPrice);
+
+        // ---------- 3️⃣ Compute payout and fees ----------
+        int256 rawPayout = int256(pos.margin) + pnl;
+        if (rawPayout < 0) rawPayout = 0;
+
+        uint256 payout = uint256(rawPayout);
+        uint256 closeFee = (payout * FEE_RATIO) / ONE;
+        uint256 netPayout = payout - closeFee;
+
+        // ---------- 4️⃣ Apply to pool and pay trader ----------
+        _applyPnLToPool(pnl);
+        usdt.safeTransfer(user, netPayout);
+
+        // ---------- 5️⃣ Mark position closed ----------
+        pos.isClosed = true;
+        pos.closePrice = closePrice;
+        pos.payout = netPayout;
+
+        emit TpSlTriggered(
+            msg.sender,
+            user,
+            positionId,
+            triggerType,
+            closePrice
+        );
+    }
+
+    function triggerLiquidation(
+        address user,
+        bytes32 positionId
+    ) external nonReentrant {
+        Position storage pos = _getOpenPositionOf(user, positionId);
+        require(!pos.isClosed, "Already closed");
+
+        // ---------- 1️⃣ Get latest oracle price ----------
+        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        uint256 mark = _toUintPrice1e8(token);
+        require(mark > 0, "Invalid oracle price");
+
+        bool canLiq = (pos.isLong && mark <= pos.liquidationPrice) ||
+            (!pos.isLong && mark >= pos.liquidationPrice);
+        require(canLiq, "Not liquidatable");
+
+        // ---------- 2️⃣ Calculate payout (losing position) ----------
+        uint256 closePrice = mark;
+        int256 pnl = pos.isLong
+            ? (int256(pos.size) *
+                (int256(closePrice) - int256(pos.entryPrice))) /
+                int256(pos.entryPrice)
+            : (int256(pos.size) *
+                (int256(pos.entryPrice) - int256(closePrice))) /
+                int256(pos.entryPrice);
+
+        int256 rawPayout = int256(pos.margin) + pnl;
+        if (rawPayout < 0) rawPayout = 0;
+
+        uint256 payout = uint256(rawPayout);
+        uint256 keeperReward = (payout * LIQUIDATION_REWARD_RATIO) / ONE; // e.g. 2%
+        uint256 traderReceive = payout > keeperReward
+            ? payout - keeperReward
+            : 0;
+
+        // ---------- 3️⃣ Apply to pool + transfers ----------
+        _applyPnLToPool(pnl);
+
+        if (keeperReward > 0) usdt.safeTransfer(msg.sender, keeperReward);
+        if (traderReceive > 0) usdt.safeTransfer(user, traderReceive);
+
+        // ---------- 4️⃣ Update position ----------
+        pos.isClosed = true;
+        pos.closePrice = closePrice;
+        pos.payout = traderReceive;
+
+        emit Liquidated(
+            msg.sender,
+            user,
+            positionId,
+            pos.pairs,
+            mark,
+            block.timestamp
+        );
     }
 
     // ---------- Helpers ----------

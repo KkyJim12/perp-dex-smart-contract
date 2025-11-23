@@ -187,7 +187,7 @@ contract PerpDEX is ReentrancyGuard {
     function _addInitialPairs() internal {
         addPairInternal(
             "BTC_USD",
-            0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
+            0xaed0c38402a5d19df6a10da761b8f8deb8c4d2ea2199ffb42f9a8c39cabdb0ce
         );
         addPairInternal(
             "ETH_USD",
@@ -195,63 +195,7 @@ contract PerpDEX is ReentrancyGuard {
         );
         addPairInternal(
             "SOL_USD",
-            0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
-        );
-        addPairInternal(
-            "BNB_USD",
-            0x1b63cd6b637e4f9ee97c445ecf74db4dbda023ddc969444fdb3ac0b2db6f4f38
-        );
-        addPairInternal(
-            "XRP_USD",
-            0x48c132276ddec5e199a706456f4c662e4fab6c8c1e7d7903b806cd0310a2f3fd
-        );
-        addPairInternal(
-            "DOGE_USD",
-            0x28f6c39eaca5f05d39b1c3c2de1428c4933c6d53295d85f1e4b74e6a12d37d90
-        );
-        addPairInternal(
-            "ADA_USD",
-            0x1fca736f6f75dd8c2c508d57f075444ef98a32956543d4d6acdfd1cb1f3f325c
-        );
-        addPairInternal(
-            "AVAX_USD",
-            0x1d4b6836c73e84c291a8521fbca2d3b5a793bcee66475d27be27fa9982d75c51
-        );
-        addPairInternal(
-            "DOT_USD",
-            0x38fc8b4f1bb1c56b99a15c1e71e83cd8b67f52c16e491061b85d34ed2a5b3735
-        );
-        addPairInternal(
-            "LINK_USD",
-            0x21bea2cd2915a3798648a86d51db7c7a98e103ef393d5dc408dc325a71cbb320
-        );
-        addPairInternal(
-            "MATIC_USD",
-            0xe96a3f4b8ce9f5a353a811d873d57ddc00c45ea1ab696648efa6247aa92c03af
-        );
-        addPairInternal(
-            "ARB_USD",
-            0x4fb6ec3c84f8d1f8dbd10be50e7d652e0f1f5e9a98525d2c58e7766505f5f99c
-        );
-        addPairInternal(
-            "OP_USD",
-            0x947228f522c3e1f54a73b17e5cfea9800a2c82fbc5e6a5e672ff7e94ece66d3c
-        );
-        addPairInternal(
-            "ATOM_USD",
-            0xb5feea9c36e4b7eb237c54b4cfabd0c4f2b1f4ba1a4e4e5ea22dd8f2fa16a9c9
-        );
-        addPairInternal(
-            "NEAR_USD",
-            0x1af3d9df238dab28c166a4630bf8c1c58ddc3e39fb8bcbac2b33cd807401e33b
-        );
-        addPairInternal(
-            "APT_USD",
-            0xd3eac9f33e049d072a61668b22afcf576c69e6f1a02ce3066f7f505f98ed0a88
-        );
-        addPairInternal(
-            "SUI_USD",
-            0x5646660deab97842423061faf03a6f6883bc5a81c853719fd5e4f2addbf1f3c6
+            0x5f52deba30fc8e465d174a264a3ae59b9ef61e84ad7d6c8b61a0b37c5071131b
         );
     }
 

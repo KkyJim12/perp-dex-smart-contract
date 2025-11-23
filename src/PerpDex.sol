@@ -21,6 +21,9 @@ contract PerpDEX is ReentrancyGuard {
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
     uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
 
+    // Reasonable leverage cap to avoid weird math / div by zero
+    uint256 public constant MAX_LEVERAGE = 150;
+
     // ---------- Staking Pool (LP Shares) ----------
     // totalStaked = total pool value (accounting for PnL)
     uint256 public totalStaked;
@@ -89,7 +92,7 @@ contract PerpDEX is ReentrancyGuard {
         uint256 margin;
         uint256 leverage;
         uint256 size;
-        uint256 entryPrice;
+        uint256 entryPrice; // 1e8
         bytes32 pythTokenId;
         bool isClosed;
         uint256 closePrice;
@@ -97,8 +100,8 @@ contract PerpDEX is ReentrancyGuard {
         uint256 liquidationPrice;
         uint256 fees;
         int256 fundingEntry;
-        uint256 takeProfit;
-        uint256 stopLoss;
+        uint256 takeProfit; // 1e8
+        uint256 stopLoss;   // 1e8
     }
 
     struct PairFunding {
@@ -207,11 +210,13 @@ contract PerpDEX is ReentrancyGuard {
         allPairs.push(pairInfo[pairs]);
     }
 
+    function setPairActive(string calldata pairs, bool active) external onlyOwner {
+        PairInfo storage info = pairInfo[pairs];
+        require(bytes(info.name).length != 0, "Pair not exist");
+        info.active = active;
+    }
+
     // ---------- Staking (LP Shares) ----------
-    /**
-     * @notice Stake USDT into the pool and receive LP shares.
-     * LP share price = totalStaked / totalShares
-     */
     function stake(uint256 amount) external nonReentrant {
         require(amount > 0, "Zero amount");
         usdt.safeTransferFrom(msg.sender, address(this), amount);
@@ -234,10 +239,6 @@ contract PerpDEX is ReentrancyGuard {
         emit Staked(msg.sender, amount);
     }
 
-    /**
-     * @notice Unstake by burning LP shares and receive pro-rata USDT.
-     * @param shareAmount Amount of LP shares to burn.
-     */
     function unstake(uint256 shareAmount) external nonReentrant {
         require(shareAmount > 0, "Zero shares");
         require(shares[msg.sender] >= shareAmount, "Not enough shares");
@@ -282,22 +283,35 @@ contract PerpDEX is ReentrancyGuard {
         uint256 takeProfit,
         uint256 stopLoss
     ) external nonReentrant {
-        require(margin > 0 && leverage > 0, "Bad params");
+        // Basic sanity
+        require(margin > 0, "Bad margin");
+        require(leverage > 0 && leverage <= MAX_LEVERAGE, "Bad leverage");
+
+        // Pair must exist & active
         PairInfo storage info = pairInfo[pairs];
         require(info.active, "Pair inactive");
+
+        // Pull margin
         usdt.safeTransferFrom(msg.sender, address(this), margin);
 
+        // Fees & net margin
         uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
+        require(fees < margin, "Fees >= margin");
         uint256 netMargin = margin - fees;
-        uint256 netSize = netMargin * leverage;
+        require(netMargin > 0, "Net margin zero");
 
-        // ---------- 1️⃣ Get current oracle price ----------
+        uint256 netSize = netMargin * leverage;
+        require(netSize > 0, "Size zero");
+
+        // Oracle price (1e8)
         PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
         require(token.price > 0, "Invalid price");
         uint256 oraclePrice = _toUintPrice1e8(token);
+        require(oraclePrice > 0, "Oracle price zero");
+
         uint256 entryPrice = applySpread(oraclePrice, isLong, true);
 
-        // ---------- 2️⃣ Validate TP/SL vs current oracle ----------
+        // Validate TP/SL vs oraclePrice (all in 1e8)
         if (takeProfit > 0) {
             if (isLong) {
                 require(takeProfit > oraclePrice, "Invalid Long TP");
@@ -313,7 +327,7 @@ contract PerpDEX is ReentrancyGuard {
             }
         }
 
-        // ---------- 3️⃣ Calculate liquidation price ----------
+        // Liquidation price
         uint256 liq = calculateLiquidationPrice(
             entryPrice,
             netSize,
@@ -324,6 +338,7 @@ contract PerpDEX is ReentrancyGuard {
         bytes32 id = keccak256(
             abi.encodePacked(msg.sender, pairs, block.timestamp, block.number)
         );
+
         PairFunding storage pf = pairFunding[pairs];
 
         positions[msg.sender].push(
@@ -347,8 +362,11 @@ contract PerpDEX is ReentrancyGuard {
             })
         );
 
-        if (isLong) pf.oiLong += netSize;
-        else pf.oiShort += netSize;
+        if (isLong) {
+            pf.oiLong += netSize;
+        } else {
+            pf.oiShort += netSize;
+        }
 
         emit OpenPosition(
             id,
@@ -370,10 +388,14 @@ contract PerpDEX is ReentrancyGuard {
     // ---------- Close Position ----------
     function closePosition(bytes32 positionId) external nonReentrant {
         Position storage pos = _getOpenPositionOf(msg.sender, positionId);
+
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
         uint256 mark = _toUintPrice1e8(token);
+        require(mark > 0, "Oracle price zero");
 
         uint256 closePrice = mark; // no spread on close
+
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(closePrice) - int256(pos.entryPrice))) /
@@ -414,12 +436,12 @@ contract PerpDEX is ReentrancyGuard {
         Position storage pos = _getOpenPositionOf(msg.sender, positionId);
         require(!pos.isClosed, "Position closed");
 
-        // ---------- 1️⃣ Get latest Pyth oracle price ----------
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
         uint256 currentPrice = _toUintPrice1e8(token);
-        require(currentPrice > 0, "Invalid oracle price");
+        require(currentPrice > 0, "Oracle price zero");
 
-        // ---------- 2️⃣ Validate take profit ----------
+        // Take profit
         if (newTp > 0) {
             if (pos.isLong) {
                 require(
@@ -435,7 +457,7 @@ contract PerpDEX is ReentrancyGuard {
             pos.takeProfit = newTp;
         }
 
-        // ---------- 3️⃣ Validate stop loss ----------
+        // Stop loss
         if (newSl > 0) {
             if (pos.isLong) {
                 require(
@@ -461,9 +483,10 @@ contract PerpDEX is ReentrancyGuard {
         Position storage pos = _getOpenPositionOf(user, positionId);
         require(!pos.isClosed, "Already closed");
 
-        // ---------- 1️⃣ Get latest oracle price ----------
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
         uint256 mark = _toUintPrice1e8(token);
+        require(mark > 0, "Oracle price zero");
 
         bool hitTp = false;
         bool hitSl = false;
@@ -494,8 +517,8 @@ contract PerpDEX is ReentrancyGuard {
 
         require(hitTp || hitSl, "No TP/SL hit");
 
-        // ---------- 2️⃣ Calculate PnL based on *exact TP/SL price* ----------
         uint256 closePrice = triggerPrice;
+
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(closePrice) - int256(pos.entryPrice))) /
@@ -504,7 +527,6 @@ contract PerpDEX is ReentrancyGuard {
                 (int256(pos.entryPrice) - int256(closePrice))) /
                 int256(pos.entryPrice);
 
-        // ---------- 3️⃣ Compute payout and fees ----------
         int256 rawPayout = int256(pos.margin) + pnl;
         if (rawPayout < 0) rawPayout = 0;
 
@@ -512,11 +534,9 @@ contract PerpDEX is ReentrancyGuard {
         uint256 closeFee = (payout * FEE_RATIO) / ONE;
         uint256 netPayout = payout - closeFee;
 
-        // ---------- 4️⃣ Apply to pool and pay trader ----------
         _applyPnLToPool(pnl);
         usdt.safeTransfer(user, netPayout);
 
-        // ---------- 5️⃣ Mark position closed ----------
         pos.isClosed = true;
         pos.closePrice = closePrice;
         pos.payout = netPayout;
@@ -538,17 +558,17 @@ contract PerpDEX is ReentrancyGuard {
         Position storage pos = _getOpenPositionOf(user, positionId);
         require(!pos.isClosed, "Already closed");
 
-        // ---------- 1️⃣ Get latest oracle price ----------
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+        require(token.price > 0, "Invalid price");
         uint256 mark = _toUintPrice1e8(token);
-        require(mark > 0, "Invalid oracle price");
+        require(mark > 0, "Oracle price zero");
 
         bool canLiq = (pos.isLong && mark <= pos.liquidationPrice) ||
             (!pos.isLong && mark >= pos.liquidationPrice);
         require(canLiq, "Not liquidatable");
 
-        // ---------- 2️⃣ Calculate payout (losing position) ----------
         uint256 closePrice = mark;
+
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(closePrice) - int256(pos.entryPrice))) /
@@ -561,19 +581,21 @@ contract PerpDEX is ReentrancyGuard {
         if (rawPayout < 0) rawPayout = 0;
 
         uint256 payout = uint256(rawPayout);
-        uint256 keeperReward = (payout * LIQUIDATION_REWARD_RATIO) / ONE; // e.g. 2%
+        uint256 keeperReward = (payout * LIQUIDATION_REWARD_RATIO) / ONE;
         uint256 traderReceive = payout > keeperReward
             ? payout - keeperReward
             : 0;
 
-        // ---------- 3️⃣ Apply to pool + transfers ----------
         _applyPnLToPool(pnl);
 
-        if (keeperReward > 0) usdt.safeTransfer(msg.sender, keeperReward);
-        if (traderReceive > 0) usdt.safeTransfer(user, traderReceive);
+        if (keeperReward > 0) {
+            usdt.safeTransfer(msg.sender, keeperReward);
+        }
+        if (traderReceive > 0) {
+            usdt.safeTransfer(user, traderReceive);
+        }
 
-        // ---------- 4️⃣ Update position ----------
-        pos.isClosed = true;
+       pos.isClosed = true;
         pos.closePrice = closePrice;
         pos.payout = traderReceive;
 
@@ -594,7 +616,9 @@ contract PerpDEX is ReentrancyGuard {
     ) internal view returns (Position storage) {
         Position[] storage arr = positions[user];
         for (uint256 i; i < arr.length; i++) {
-            if (!arr[i].isClosed && arr[i].id == positionId) return arr[i];
+            if (!arr[i].isClosed && arr[i].id == positionId) {
+                return arr[i];
+            }
         }
         revert("Position not found/already closed");
     }
@@ -615,7 +639,9 @@ contract PerpDEX is ReentrancyGuard {
         uint256 margin,
         bool isLong
     ) internal pure returns (uint256) {
+        require(size > 0, "Size zero");
         uint256 maintMargin = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
+        require(maintMargin < margin, "Maint >= margin");
         uint256 effectiveMargin = margin - maintMargin;
         uint256 priceChange = (entryPrice * effectiveMargin) / size;
         return isLong ? entryPrice - priceChange : entryPrice + priceChange;
@@ -628,11 +654,18 @@ contract PerpDEX is ReentrancyGuard {
         int256 v = int256(p.price);
         int32 expo = p.expo;
         int32 diff = -8 - expo;
+
         if (diff > 0) {
-            for (int32 i; i < diff; i++) v *= 10;
+            for (int32 i; i < diff; i++) {
+                v *= 10;
+            }
         } else if (diff < 0) {
-            for (int32 i; i < -diff; i++) v /= 10;
+            for (int32 i; i < -diff; i++) {
+                v /= 10;
+            }
         }
+
+        require(v > 0, "Scaled price <= 0");
         return uint256(v);
     }
 }

@@ -1,89 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/pyth-sdk-solidity/IPyth.sol";
-import "lib/pyth-sdk-solidity/PythStructs.sol";
+// ⚠️ Adjust import path / type names to your actual fhEVM / Zama SDK
+import {TFHE, euint64, ebool} from "lib/fhevm/TFHE.sol";
 
-contract PerpDEXPublic is ReentrancyGuard {
-    using SafeERC20 for ERC20;
+contract PerpDEXPrivateEngine {
+    using TFHE for euint64;
+    using TFHE for ebool;
 
-    // ---------- Core Addresses ----------
-    IPyth public immutable pyth;
-    ERC20 public immutable usdt;
+    // ------------------
+    // Ownership / Access
+    // ------------------
     address public owner;
-    address public relayer;        // off-chain engine / relayer
-    address public privateEngine;  // FHE contract (Zama)
+    address public relayer; // same relayer address used in PerpDEXPublic
 
-    // ---------- Constants ----------
-    uint256 public constant ONE = 1e18;
-    uint256 public constant FEE_RATIO = 5e14; // 0.05%
-    uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
-    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
-
-    uint256 public constant SHARE_SCALE = 1e18;
-    uint8 public immutable usdtDecimals;
-
-    // ---------- LP Pool ----------
-    uint256 public totalStaked;     // RAW USDT UNITS (e.g. 6 decimals)
-    uint256 public totalShares;     // 1e18 precision
-    mapping(address => uint256) public shares;
-
-    event Staked(address indexed user, uint256 amount);
-    event Unstaked(address indexed user, uint256 amount);
-    event PoolUpdated(uint256 totalStaked, string reason, int256 pnlImpact);
-
-    // Helper: user LP value
-    function stakeValueOf(address user) external view returns (uint256) {
-        if (totalShares == 0) return 0;
-        return (shares[user] * totalStaked) / totalShares;
-    }
-
-    // ---------- Pairs ----------
-    struct PairInfo {
-        string name;
-        bytes32 pythTokenId;
-        bool active;
-    }
-
-    mapping(string => PairInfo) public pairInfo;
-    PairInfo[] public allPairs;
-
-    // ---------- Username (optional UI nicety) ----------
-    mapping(address => string) public usernames;
-    mapping(string => address) public usernameToAddress;
-
-    event UsernameRegistered(address indexed user, string username);
-    event UsernameChanged(address indexed user, string oldUsername, string newUsername);
-
-    // ---------- Relayer / Engine Events ----------
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RelayerSet(address indexed oldRelayer, address indexed newRelayer);
-    event PrivateEngineSet(address indexed oldEngine, address indexed newEngine);
 
-    // Margin & settlement events (no sensitive params)
-    event MarginLocked(
-        address indexed user,
-        bytes32 indexed positionId,
-        string pairs,
-        uint256 margin,
-        uint256 fees
-    );
-
-    event PositionSettled(
-        address indexed user,
-        bytes32 indexed positionId,
-        int256 pnl,
-        uint256 payout,
-        uint256 closeFee,
-        string reason // "CLOSE", "TP", "SL", "LIQ"
-    );
-
-    // ---------- Modifiers ----------
     modifier onlyOwner() {
-        require(msg.sender == owner, "Not admin");
+        require(msg.sender == owner, "Not owner");
         _;
     }
 
@@ -92,26 +27,14 @@ contract PerpDEXPublic is ReentrancyGuard {
         _;
     }
 
-    constructor(address _usdt, address _pyth) {
-        require(_usdt != address(0) && _pyth != address(0), "Invalid address");
-        usdt = ERC20(_usdt);
-        pyth = IPyth(_pyth);
+    constructor() {
         owner = msg.sender;
-        usdtDecimals = ERC20(_usdt).decimals();
-
         emit OwnershipTransferred(address(0), msg.sender);
-        _addInitialPairs();
     }
 
-    // ---------- Admin ----------
     function setRelayer(address _relayer) external onlyOwner {
         emit RelayerSet(relayer, _relayer);
         relayer = _relayer;
-    }
-
-    function setPrivateEngine(address _engine) external onlyOwner {
-        emit PrivateEngineSet(privateEngine, _engine);
-        privateEngine = _engine;
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
@@ -120,184 +43,197 @@ contract PerpDEXPublic is ReentrancyGuard {
         owner = newOwner;
     }
 
-    // ---------- Username ----------
-    function registerUsername(string calldata name) external {
-        require(bytes(name).length >= 3 && bytes(name).length <= 32, "Bad length");
-        require(bytes(usernames[msg.sender]).length == 0, "Already registered");
-        require(usernameToAddress[name] == address(0), "Name taken");
+    // ------------------------
+    // Encrypted Position Store
+    // ------------------------
 
-        usernames[msg.sender] = name;
-        usernameToAddress[name] = msg.sender;
-        emit UsernameRegistered(msg.sender, name);
+    struct EncPosition {
+        // 🔓 minimal readable info
+        bytes32 id;     // position id (only thing user/others can see)
+        address user;   // owner (needed to sync with DB / UI)
+        bool isLong;    // direction (can also be encrypted if you really want)
+
+        // 🔒 encrypted fields
+        euint64 margin;      // net margin (scaled, e.g. USDT*1e6)
+        euint64 leverage;    // leverage as integer
+        euint64 size;        // position size (scaled)
+        euint64 entryPrice;  // 1e8
+        euint64 liqPrice;    // 1e8
+        euint64 tp;          // 1e8 (0 if none)
+        euint64 sl;          // 1e8 (0 if none)
+
+        // status
+        bool isClosed;       // plain boolean is fine
     }
 
-    function changeUsername(string calldata newName) external {
-        string memory current = usernames[msg.sender];
-        require(bytes(current).length > 0, "Not registered");
-        require(bytes(newName).length >= 3 && bytes(newName).length <= 32, "Bad length");
-        require(usernameToAddress[newName] == address(0), "Name taken");
+    // positionId -> encrypted position
+    mapping(bytes32 => EncPosition) private positions;
 
-        delete usernameToAddress[current];
-        usernames[msg.sender] = newName;
-        usernameToAddress[newName] = msg.sender;
-        emit UsernameChanged(msg.sender, current, newName);
-    }
+    event EncryptedPositionStored(bytes32 indexed id, address indexed user);
+    event EncryptedPositionClosed(bytes32 indexed id);
 
-    // ---------- Pair Management ----------
-    function _addInitialPairs() internal {
-        addPairInternal(
-            "BTC_USD",
-            0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
-        );
-        addPairInternal(
-            "ETH_USD",
-            0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace
-        );
-        addPairInternal(
-            "SOL_USD",
-            0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
-        );
-    }
-
-    function addPairInternal(string memory pairs, bytes32 pythTokenId) internal {
-        pairInfo[pairs] = PairInfo(pairs, pythTokenId, true);
-        allPairs.push(pairInfo[pairs]);
-    }
-
-    function setPairActive(string calldata pairs, bool active) external onlyOwner {
-        PairInfo storage info = pairInfo[pairs];
-        require(bytes(info.name).length != 0, "Pair missing");
-        info.active = active;
-    }
-
-    // ---------- Staking (LP Shares) ----------
-    function stake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Zero amount");
-        usdt.safeTransferFrom(msg.sender, address(this), amount);
-
-        uint256 mintShares;
-        if (totalStaked == 0 || totalShares == 0) {
-            mintShares = amount * SHARE_SCALE;
-        } else {
-            mintShares = (amount * totalShares) / totalStaked;
-        }
-
-        require(mintShares > 0, "Amount too small");
-
-        totalStaked += amount;
-        totalShares += mintShares;
-        shares[msg.sender] += mintShares;
-
-        emit Staked(msg.sender, amount);
-    }
-
-    function unstake(uint256 shareAmount) external nonReentrant {
-        require(shareAmount > 0, "Zero shares");
-        require(shares[msg.sender] >= shareAmount, "Not enough shares");
-        require(totalShares > 0, "No shares");
-
-        uint256 amountOut = (shareAmount * totalStaked) / totalShares;
-
-        shares[msg.sender] -= shareAmount;
-        totalShares -= shareAmount;
-        totalStaked -= amountOut;
-
-        usdt.safeTransfer(msg.sender, amountOut);
-
-        emit Unstaked(msg.sender, amountOut);
-    }
-
-    // ---------- Pool PnL Logic ----------
-    function _applyPnLToPool(int256 pnl) internal {
-        if (pnl > 0) {
-            uint256 loss = uint256(pnl);
-            require(totalStaked >= loss, "Pool depleted");
-            totalStaked -= loss;
-            emit PoolUpdated(totalStaked, "TraderWin", pnl);
-        } else if (pnl < 0) {
-            uint256 gain = uint256(-pnl);
-            totalStaked += gain;
-            emit PoolUpdated(totalStaked, "TraderLoss", pnl);
-        }
-    }
-
-    // ---------- Relayed Position Lifecycle ----------
-    /**
-     * @notice Called by relayer when opening a position.
-     * @dev
-     *  - Pulls margin from user (user must approve this contract).
-     *  - `fees` is computed off-chain by relayer (you can re-check limits here).
-     *  - FHE engine will store encrypted position data.
-     */
-    function lockMarginForPosition(
-        address user,
-        string calldata pairs,
-        bytes32 positionId,
-        uint256 margin,
-        uint256 fees
-    ) external onlyRelayer nonReentrant {
-        require(margin > 0, "Zero margin");
-        require(fees <= margin, "Bad fee");
-        PairInfo storage info = pairInfo[pairs];
-        require(info.active, "Pair inactive");
-
-        // Pull funds from user
-        usdt.safeTransferFrom(user, address(this), margin);
-
-        uint256 netMargin = margin - fees;
-        // All USDT remains inside contract; pool mechanics handled via PnL routing
-
-        emit MarginLocked(user, positionId, pairs, netMargin, fees);
-        // NOTE: relayer must separately call FHE private engine to store encrypted pos
-    }
+    // --------------------------
+    // Store / Update (Relayer)
+    // --------------------------
 
     /**
-     * @notice Called by relayer when closing / liquidating / TP/SL a position.
-     * @dev
-     *  - `pnl` is trader PnL in RAW USDT units (positive if trader wins).
-     *  - `payout` is net USDT sent to trader (after fees).
-     *  - `closeFee` is fee amount charged (optional, off-chain computed).
-     *  - `reason` is a lightweight string: "CLOSE", "TP", "SL", "LIQ".
+     * @notice Store a new encrypted position.
+     * @dev All euint64/ebool values must already be ciphertexts produced off-chain
+     *      with the fhEVM public key (using Zama SDK).
      *
-     *  In a fully trust-minimized design, `pnl/payout` must be proven via zk.
-     *  For now, we trust the relayer.
+     *  This function should be called right after `lockMarginForPosition` on
+     *  PerpDEXPublic, using the same `positionId` & `user`.
      */
-    function settlePosition(
+    function storeEncryptedPosition(
+        bytes32 id,
         address user,
-        bytes32 positionId,
-        int256 pnl,
-        uint256 payout,
-        uint256 closeFee,
-        string calldata reason
-    ) external onlyRelayer nonReentrant {
-        // Apply PnL to LP pool
-        _applyPnLToPool(pnl);
+        bool isLong,
+        euint64 encMargin,
+        euint64 encLeverage,
+        euint64 encSize,
+        euint64 encEntryPrice,
+        euint64 encLiqPrice,
+        euint64 encTp,
+        euint64 encSl
+    ) external onlyRelayer {
+        require(user != address(0), "Bad user");
+        require(positions[id].user == address(0), "Position exists");
 
-        // Pay trader
-        if (payout > 0) {
-            usdt.safeTransfer(user, payout);
-        }
+        positions[id] = EncPosition({
+            id: id,
+            user: user,
+            isLong: isLong,
+            margin: encMargin,
+            leverage: encLeverage,
+            size: encSize,
+            entryPrice: encEntryPrice,
+            liqPrice: encLiqPrice,
+            tp: encTp,
+            sl: encSl,
+            isClosed: false
+        });
 
-        emit PositionSettled(user, positionId, pnl, payout, closeFee, reason);
-        // NOTE: relayer must also update FHE engine to mark position closed.
+        emit EncryptedPositionStored(id, user);
     }
 
-    // ---------- Oracle Helper ----------
-    function getPairOraclePrice1e8(string calldata pairs) external view returns (uint256) {
-        PairInfo storage info = pairInfo[pairs];
-        require(info.active, "Pair inactive");
+    /**
+     * @notice Mark position as closed (after settlement in PerpDEXPublic).
+     */
+    function markPositionClosed(bytes32 id) external onlyRelayer {
+        EncPosition storage p = positions[id];
+        require(p.user != address(0), "Unknown position");
+        require(!p.isClosed, "Already closed");
 
-        PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
-        require(token.price > 0, "Bad price");
+        p.isClosed = true;
+        emit EncryptedPositionClosed(id);
+    }
 
-        int256 v = int256(token.price);
-        int32 expo = token.expo;
-        int32 diff = -8 - expo;
-        if (diff > 0) {
-            for (int32 i; i < diff; i++) v *= 10;
-        } else if (diff < 0) {
-            for (int32 i; i < -diff; i++) v /= 10;
+    // -----------------------------------------
+    // 🔍 Encrypted TP/SL & Liquidation Checks
+    // -----------------------------------------
+    // These are what your keeper/relayer calls instead of reading TP/SL/liq.
+
+    /**
+     * @notice Check TP/SL triggers using FHE-comparisons.
+     * @param id        position id
+     * @param markPrice1e8  current oracle mark price, scaled to 1e8
+     * @return hitTp   true if TP should trigger
+     * @return hitSl   true if SL should trigger
+     *
+     * Off-chain flow:
+     *   - keeper gets plain oracle price (Pyth)
+     *   - scales to 1e8
+     *   - calls this function
+     *   - receives boolean flags only (no numeric leaks)
+     */
+    function checkTpSl(
+        bytes32 id,
+        uint64 markPrice1e8
+    ) external view onlyRelayer returns (bool hitTp, bool hitSl) {
+        EncPosition storage p = positions[id];
+        require(p.user != address(0), "Unknown position");
+        if (p.isClosed) {
+            return (false, false);
         }
-        return uint256(v);
+
+        // Convert plain price to encrypted
+        euint64 encMark = TFHE.asEuint64(markPrice1e8);
+
+        // If TP/SL were disabled, enc value would be zero; we can treat zero as "no TP/SL"
+        ebool hasTp = TFHE.gt(p.tp, TFHE.asEuint64(0));
+        ebool hasSl = TFHE.gt(p.sl, TFHE.asEuint64(0));
+
+        ebool condTp;
+        ebool condSl;
+
+        if (p.isLong) {
+            // Long:
+            //  - TP if mark >= TP
+            //  - SL if mark <= SL
+            condTp = TFHE.and(hasTp, TFHE.ge(encMark, p.tp));
+            condSl = TFHE.and(hasSl, TFHE.le(encMark, p.sl));
+        } else {
+            // Short:
+            //  - TP if mark <= TP
+            //  - SL if mark >= SL
+            condTp = TFHE.and(hasTp, TFHE.le(encMark, p.tp));
+            condSl = TFHE.and(hasSl, TFHE.ge(encMark, p.sl));
+        }
+
+        // Decrypt to plain bool for the relayer/keeper
+        // ⚠ depending on your fhEVM configuration, decrypt may require special permissions.
+        hitTp = TFHE.decrypt(condTp);
+        hitSl = TFHE.decrypt(condSl);
+    }
+
+    /**
+     * @notice Check if position is liquidatable using encrypted comparisons.
+     * @param id            position id
+     * @param markPrice1e8  oracle price scaled to 1e8
+     * @return shouldLiq    true if liquidation condition is met
+     *
+     * Long:
+     *  - liq if mark <= liqPrice
+     * Short:
+     *  - liq if mark >= liqPrice
+     */
+    function checkLiquidation(
+        bytes32 id,
+        uint64 markPrice1e8
+    ) external view onlyRelayer returns (bool shouldLiq) {
+        EncPosition storage p = positions[id];
+        require(p.user != address(0), "Unknown position");
+        if (p.isClosed) {
+            return false;
+        }
+
+        euint64 encMark = TFHE.asEuint64(markPrice1e8);
+
+        ebool cond;
+        if (p.isLong) {
+            cond = TFHE.le(encMark, p.liqPrice);
+        } else {
+            cond = TFHE.ge(encMark, p.liqPrice);
+        }
+
+        shouldLiq = TFHE.decrypt(cond);
+    }
+
+    // -------------
+    // View Helpers
+    // -------------
+
+    /**
+     * @notice Returns minimal, NON-SENSITIVE info for UI/DB.
+     * @dev No numeric values are returned, only id/user/isLong/isClosed.
+     *      All prices/margins/size remain fully encrypted.
+     */
+    function getPositionMeta(bytes32 id)
+        external
+        view
+        returns (address user, bool isLong, bool isClosed)
+    {
+        EncPosition storage p = positions[id];
+        return (p.user, p.isLong, p.isClosed);
     }
 }

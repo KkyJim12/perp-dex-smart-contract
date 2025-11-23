@@ -1,3 +1,4 @@
+#### MONAD ####
 Deploy Command (Monad)
 forge script script/MockUSDT.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
 forge script script/PerpDex.s.sol:PerpDexScript --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID --broadcast
@@ -14,4 +15,24 @@ forge verify-contract \
   --verifier sourcify \
   --verifier-url 'https://sourcify-api-monad.blockvision.org' \
   0x05769BD5955e149aB31D349163d514DfBeCAaffB \
+  src/PerpDex.sol:PerpDEX
+
+
+#### SEPHOLIA ####
+Deploy Command (SEPHOLIA)
+forge script script/MockUSDT.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID  --broadcast
+forge script script/PerpDex.s.sol:PerpDexScript --rpc-url $RPC_URL --private-key $PRIVATE_KEY --chain-id $CHAIN_ID --broadcast
+
+Flatten Command 
+forge flatten src/MockUSDT.sol > flatten/FlattenedMockUSDT.sol
+forge flatten src/PerpDex.sol > flatten/FlattenedPerpDex.sol
+
+Verify Command (SEPHOLIA)
+forge verify-contract --chain-id $CHAIN_ID $PERPDEX_CONTRACT_ADDRESS src/PerpDex.sol:PerpDex --flatten --etherscan-api-key $ETHER_SCAN_API_KEY --watch
+
+forge verify-contract \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY \
+  --verifier sourcify \
+  --verifier-url 'https://sourcify.dev/server' \
+  0xB6bD4cd0EAbF0b8e55Cc06826585d0aEd440af4B \
   src/PerpDex.sol:PerpDEX

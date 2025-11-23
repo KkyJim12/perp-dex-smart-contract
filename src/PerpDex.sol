@@ -170,6 +170,18 @@ contract PerpDEX is ReentrancyGuard {
         address indexed oldOwner,
         address indexed newOwner
     );
+    event BugIdentified(
+        uint256 indexed bugId,
+        string severity,
+        string category,
+        string description,
+        bool isFixed
+    );
+    
+    // ---------- Debug Events ----------
+    event DebugOpenPosition(string step, uint256 value1, uint256 value2, string message);
+    event DebugOpenPositionString(string step, string message);
+    event DebugOpenPositionBool(string step, bool value, string message);
 
     // ---------- Ownership ----------
     modifier onlyOwner() {
@@ -185,6 +197,9 @@ contract PerpDEX is ReentrancyGuard {
         emit OwnershipTransferred(address(0), msg.sender);
         _addInitialPairs();
     }
+
+    // ---------- Receive ETH ----------
+    receive() external payable {}
 
     // ---------- Pair Management ----------
     function _addInitialPairs() internal {
@@ -283,57 +298,79 @@ contract PerpDEX is ReentrancyGuard {
         uint256 takeProfit,
         uint256 stopLoss
     ) external nonReentrant {
+        emit DebugOpenPosition("START", margin, leverage, "openPosition called");
+        
         // Basic sanity
         require(margin > 0, "Bad margin");
+        emit DebugOpenPosition("MARGIN_CHECK", margin, 0, "Margin validated");
+        
         require(leverage > 0 && leverage <= MAX_LEVERAGE, "Bad leverage");
+        emit DebugOpenPosition("LEVERAGE_CHECK", leverage, MAX_LEVERAGE, "Leverage validated");
 
         // Pair must exist & active
         PairInfo storage info = pairInfo[pairs];
+        emit DebugOpenPositionBool("PAIR_CHECK", info.active, "Checking pair active");
         require(info.active, "Pair inactive");
+        emit DebugOpenPositionString("PAIR_VALIDATED", pairs);
 
         // Pull margin
         usdt.safeTransferFrom(msg.sender, address(this), margin);
+        emit DebugOpenPosition("MARGIN_TRANSFERRED", margin, 0, "USDT transferred");
 
         // Fees & net margin
         uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
+        emit DebugOpenPosition("FEES_CALCULATED", fees, margin, "Fee calculation");
         require(fees < margin, "Fees >= margin");
+        
         uint256 netMargin = margin - fees;
+        emit DebugOpenPosition("NET_MARGIN", netMargin, fees, "Net margin after fees");
         require(netMargin > 0, "Net margin zero");
 
         uint256 netSize = netMargin * leverage;
+        emit DebugOpenPosition("NET_SIZE", netSize, netMargin, "Position size calculated");
         require(netSize > 0, "Size zero");
 
         // Oracle price (1e8)
         PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
+        emit DebugOpenPosition("ORACLE_FETCHED", uint256(uint64(token.price)), uint256(uint32(token.expo)), "Oracle price fetched");
         require(token.price > 0, "Invalid price");
+        
         uint256 oraclePrice = _toUintPrice1e8(token);
+        emit DebugOpenPosition("ORACLE_CONVERTED", oraclePrice, 0, "Oracle price converted to 1e8");
         require(oraclePrice > 0, "Oracle price zero");
 
         uint256 entryPrice = applySpread(oraclePrice, isLong, true);
+        emit DebugOpenPosition("ENTRY_PRICE", entryPrice, oraclePrice, "Entry price with spread");
 
         // Validate TP/SL vs oraclePrice (all in 1e8)
         if (takeProfit > 0) {
+            emit DebugOpenPosition("TP_CHECK", takeProfit, oraclePrice, "Validating take profit");
             if (isLong) {
                 require(takeProfit > oraclePrice, "Invalid Long TP");
             } else {
                 require(takeProfit < oraclePrice, "Invalid Short TP");
             }
+            emit DebugOpenPosition("TP_VALIDATED", takeProfit, 0, "Take profit validated");
         }
         if (stopLoss > 0) {
+            emit DebugOpenPosition("SL_CHECK", stopLoss, oraclePrice, "Validating stop loss");
             if (isLong) {
                 require(stopLoss < oraclePrice, "Invalid Long SL");
             } else {
                 require(stopLoss > oraclePrice, "Invalid Short SL");
             }
+            emit DebugOpenPosition("SL_VALIDATED", stopLoss, 0, "Stop loss validated");
         }
 
         // Liquidation price
+        emit DebugOpenPosition("LIQ_CALC_START", entryPrice, netMargin, "Starting liquidation calc");
         uint256 liq = calculateLiquidationPrice(
             entryPrice,
             netSize,
             netMargin,
             isLong
         );
+        emit DebugOpenPosition("LIQ_CALC_DONE", liq, entryPrice, "Liquidation price calculated");
 
         bytes32 id = keccak256(
             abi.encodePacked(msg.sender, pairs, block.timestamp, block.number)

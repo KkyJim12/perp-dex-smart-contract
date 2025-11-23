@@ -187,7 +187,7 @@ contract PerpDEX is ReentrancyGuard {
     function _addInitialPairs() internal {
         addPairInternal(
             "BTC_USD",
-            0xaed0c38402a5d19df6a10da761b8f8deb8c4d2ea2199ffb42f9a8c39cabdb0ce
+            0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
         );
         addPairInternal(
             "ETH_USD",
@@ -195,7 +195,7 @@ contract PerpDEX is ReentrancyGuard {
         );
         addPairInternal(
             "SOL_USD",
-            0x5f52deba30fc8e465d174a264a3ae59b9ef61e84ad7d6c8b61a0b37c5071131b
+            0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
     }
 

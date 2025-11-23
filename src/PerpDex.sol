@@ -21,13 +21,21 @@ contract PerpDEX is ReentrancyGuard {
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
     uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
 
-    // ---------- Staking Pool ----------
+    // ---------- Staking Pool (LP Shares) ----------
+    // totalStaked = total pool value (accounting for PnL)
     uint256 public totalStaked;
-    mapping(address => uint256) public stakedBalance;
+    uint256 public totalShares;
+    mapping(address => uint256) public shares;
 
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
     event PoolUpdated(uint256 totalStaked, string reason, int256 pnlImpact);
+
+    // Helper: current value of a user's stake
+    function stakeValueOf(address user) external view returns (uint256) {
+        if (totalShares == 0) return 0;
+        return (shares[user] * totalStaked) / totalShares;
+    }
 
     // ---------- Usernames ----------
     mapping(address => string) public usernames;
@@ -189,6 +197,62 @@ contract PerpDEX is ReentrancyGuard {
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
+        addPairInternal(
+            "BNB_USD",
+            0x1b63cd6b637e4f9ee97c445ecf74db4dbda023ddc969444fdb3ac0b2db6f4f38
+        );
+        addPairInternal(
+            "XRP_USD",
+            0x48c132276ddec5e199a706456f4c662e4fab6c8c1e7d7903b806cd0310a2f3fd
+        );
+        addPairInternal(
+            "DOGE_USD",
+            0x28f6c39eaca5f05d39b1c3c2de1428c4933c6d53295d85f1e4b74e6a12d37d90
+        );
+        addPairInternal(
+            "ADA_USD",
+            0x1fca736f6f75dd8c2c508d57f075444ef98a32956543d4d6acdfd1cb1f3f325c
+        );
+        addPairInternal(
+            "AVAX_USD",
+            0x1d4b6836c73e84c291a8521fbca2d3b5a793bcee66475d27be27fa9982d75c51
+        );
+        addPairInternal(
+            "DOT_USD",
+            0x38fc8b4f1bb1c56b99a15c1e71e83cd8b67f52c16e491061b85d34ed2a5b3735
+        );
+        addPairInternal(
+            "LINK_USD",
+            0x21bea2cd2915a3798648a86d51db7c7a98e103ef393d5dc408dc325a71cbb320
+        );
+        addPairInternal(
+            "MATIC_USD",
+            0xe96a3f4b8ce9f5a353a811d873d57ddc00c45ea1ab696648efa6247aa92c03af
+        );
+        addPairInternal(
+            "ARB_USD",
+            0x4fb6ec3c84f8d1f8dbd10be50e7d652e0f1f5e9a98525d2c58e7766505f5f99c
+        );
+        addPairInternal(
+            "OP_USD",
+            0x947228f522c3e1f54a73b17e5cfea9800a2c82fbc5e6a5e672ff7e94ece66d3c
+        );
+        addPairInternal(
+            "ATOM_USD",
+            0xb5feea9c36e4b7eb237c54b4cfabd0c4f2b1f4ba1a4e4e5ea22dd8f2fa16a9c9
+        );
+        addPairInternal(
+            "NEAR_USD",
+            0x1af3d9df238dab28c166a4630bf8c1c58ddc3e39fb8bcbac2b33cd807401e33b
+        );
+        addPairInternal(
+            "APT_USD",
+            0xd3eac9f33e049d072a61668b22afcf576c69e6f1a02ce3066f7f505f98ed0a88
+        );
+        addPairInternal(
+            "SUI_USD",
+            0x5646660deab97842423061faf03a6f6883bc5a81c853719fd5e4f2addbf1f3c6
+        );
     }
 
     function addPairInternal(
@@ -199,26 +263,59 @@ contract PerpDEX is ReentrancyGuard {
         allPairs.push(pairInfo[pairs]);
     }
 
-    // ---------- Staking ----------
+    // ---------- Staking (LP Shares) ----------
+    /**
+     * @notice Stake USDT into the pool and receive LP shares.
+     * LP share price = totalStaked / totalShares
+     */
     function stake(uint256 amount) external nonReentrant {
         require(amount > 0, "Zero amount");
         usdt.safeTransferFrom(msg.sender, address(this), amount);
-        stakedBalance[msg.sender] += amount;
+
+        uint256 mintShares;
+        if (totalStaked == 0 || totalShares == 0) {
+            // First liquidity provider or reset: 1:1 mapping
+            mintShares = amount;
+        } else {
+            // Maintain proportional ownership
+            mintShares = (amount * totalShares) / totalStaked;
+        }
+
+        require(mintShares > 0, "Zero shares");
+
         totalStaked += amount;
+        shares[msg.sender] += mintShares;
+        totalShares += mintShares;
+
         emit Staked(msg.sender, amount);
     }
 
-    function unstake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Zero amount");
-        require(stakedBalance[msg.sender] >= amount, "Not enough staked");
-        require(totalStaked >= amount, "Pool low");
-        stakedBalance[msg.sender] -= amount;
-        totalStaked -= amount;
-        usdt.safeTransfer(msg.sender, amount);
-        emit Unstaked(msg.sender, amount);
+    /**
+     * @notice Unstake by burning LP shares and receive pro-rata USDT.
+     * @param shareAmount Amount of LP shares to burn.
+     */
+    function unstake(uint256 shareAmount) external nonReentrant {
+        require(shareAmount > 0, "Zero shares");
+        require(shares[msg.sender] >= shareAmount, "Not enough shares");
+        require(totalShares > 0, "No shares");
+
+        uint256 amountOut = (shareAmount * totalStaked) / totalShares;
+
+        shares[msg.sender] -= shareAmount;
+        totalShares -= shareAmount;
+        totalStaked -= amountOut;
+
+        usdt.safeTransfer(msg.sender, amountOut);
+
+        emit Unstaked(msg.sender, amountOut);
     }
 
     // ---------- Core: Pool PnL ----------
+    /**
+     * @dev Positive pnl => trader win => pool loses.
+     *      Negative pnl => trader loss => pool gains.
+     *      This directly changes LP share price.
+     */
     function _applyPnLToPool(int256 pnl) internal {
         if (pnl > 0) {
             uint256 loss = uint256(pnl);
@@ -332,7 +429,7 @@ contract PerpDEX is ReentrancyGuard {
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
         uint256 mark = _toUintPrice1e8(token);
 
-        uint256 closePrice = mark; // no spread
+        uint256 closePrice = mark; // no spread on close
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(closePrice) - int256(pos.entryPrice))) /
@@ -364,6 +461,7 @@ contract PerpDEX is ReentrancyGuard {
         );
     }
 
+    // ---------- TP/SL Management ----------
     function setTpSl(
         bytes32 positionId,
         uint256 newTp,
@@ -409,7 +507,6 @@ contract PerpDEX is ReentrancyGuard {
             pos.stopLoss = newSl;
         }
 
-        // ---------- 4️⃣ Emit event ----------
         emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
     }
 
@@ -454,7 +551,7 @@ contract PerpDEX is ReentrancyGuard {
         require(hitTp || hitSl, "No TP/SL hit");
 
         // ---------- 2️⃣ Calculate PnL based on *exact TP/SL price* ----------
-        uint256 closePrice = triggerPrice; // Use the exact target price
+        uint256 closePrice = triggerPrice;
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(closePrice) - int256(pos.entryPrice))) /
@@ -489,6 +586,7 @@ contract PerpDEX is ReentrancyGuard {
         );
     }
 
+    // ---------- Liquidation ----------
     function triggerLiquidation(
         address user,
         bytes32 positionId
@@ -586,8 +684,11 @@ contract PerpDEX is ReentrancyGuard {
         int256 v = int256(p.price);
         int32 expo = p.expo;
         int32 diff = -8 - expo;
-        if (diff > 0) for (int32 i; i < diff; i++) v *= 10;
-        else if (diff < 0) for (int32 i; i < -diff; i++) v /= 10;
+        if (diff > 0) {
+            for (int32 i; i < diff; i++) v *= 10;
+        } else if (diff < 0) {
+            for (int32 i; i < -diff; i++) v /= 10;
+        }
         return uint256(v);
     }
 }

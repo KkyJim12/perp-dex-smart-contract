@@ -4,173 +4,91 @@ pragma solidity ^0.8.20;
 import "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
+import "lib/pyth-sdk-solidity/PythStructs.sol";
 
-contract PerpDEX is ReentrancyGuard {
+contract PerpDEXPublic is ReentrancyGuard {
     using SafeERC20 for ERC20;
 
+    // ---------- Core Addresses ----------
     IPyth public immutable pyth;
     ERC20 public immutable usdt;
     address public owner;
+    address public relayer;        // off-chain engine / relayer
+    address public privateEngine;  // FHE contract (Zama)
 
     // ---------- Constants ----------
     uint256 public constant ONE = 1e18;
     uint256 public constant FEE_RATIO = 5e14; // 0.05%
-    uint256 public constant SPREAD_BPS = 5; // 0.05%
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
     uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
 
-    // ---------- Staking Pool (LP Shares) ----------
-    // totalStaked = total pool value (accounting for PnL)
-    uint256 public totalStaked;
-    uint256 public totalShares;
+    uint256 public constant SHARE_SCALE = 1e18;
+    uint8 public immutable usdtDecimals;
+
+    // ---------- LP Pool ----------
+    uint256 public totalStaked;     // RAW USDT UNITS (e.g. 6 decimals)
+    uint256 public totalShares;     // 1e18 precision
     mapping(address => uint256) public shares;
 
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
     event PoolUpdated(uint256 totalStaked, string reason, int256 pnlImpact);
 
-    // Helper: current value of a user's stake
+    // Helper: user LP value
     function stakeValueOf(address user) external view returns (uint256) {
         if (totalShares == 0) return 0;
         return (shares[user] * totalStaked) / totalShares;
     }
 
-    // ---------- Usernames ----------
-    mapping(address => string) public usernames;
-    mapping(string => address) public usernameToAddress;
-
-    event UsernameRegistered(address indexed user, string username);
-    event UsernameChanged(
-        address indexed user,
-        string oldUsername,
-        string newUsername
-    );
-
-    function registerUsername(string calldata name) external {
-        require(
-            bytes(name).length >= 3 && bytes(name).length <= 32,
-            "Bad length"
-        );
-        require(bytes(usernames[msg.sender]).length == 0, "Already registered");
-        require(usernameToAddress[name] == address(0), "Name taken");
-
-        usernames[msg.sender] = name;
-        usernameToAddress[name] = msg.sender;
-
-        emit UsernameRegistered(msg.sender, name);
-    }
-
-    function changeUsername(string calldata newName) external {
-        string memory current = usernames[msg.sender];
-        require(bytes(current).length > 0, "Not registered");
-        require(
-            bytes(newName).length >= 3 && bytes(newName).length <= 32,
-            "Bad length"
-        );
-        require(usernameToAddress[newName] == address(0), "Name taken");
-
-        // Release old name
-        delete usernameToAddress[current];
-
-        // Assign new name
-        usernames[msg.sender] = newName;
-        usernameToAddress[newName] = msg.sender;
-
-        emit UsernameChanged(msg.sender, current, newName);
-    }
-
-    // ---------- Data ----------
-    struct Position {
-        bytes32 id;
-        string pairs;
-        bool isLong;
-        uint256 margin;
-        uint256 leverage;
-        uint256 size;
-        uint256 entryPrice;
-        bytes32 pythTokenId;
-        bool isClosed;
-        uint256 closePrice;
-        uint256 payout;
-        uint256 liquidationPrice;
-        uint256 fees;
-        int256 fundingEntry;
-        uint256 takeProfit;
-        uint256 stopLoss;
-    }
-
-    struct PairFunding {
-        uint256 oiLong;
-        uint256 oiShort;
-        int256 growth;
-        uint256 lastUpdate;
-    }
-
+    // ---------- Pairs ----------
     struct PairInfo {
         string name;
         bytes32 pythTokenId;
         bool active;
     }
 
-    mapping(address => Position[]) public positions;
-    mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
     PairInfo[] public allPairs;
 
-    // ---------- Events ----------
-    event OpenPosition(
-        bytes32 indexed id,
+    // ---------- Username (optional UI nicety) ----------
+    mapping(address => string) public usernames;
+    mapping(string => address) public usernameToAddress;
+
+    event UsernameRegistered(address indexed user, string username);
+    event UsernameChanged(address indexed user, string oldUsername, string newUsername);
+
+    // ---------- Relayer / Engine Events ----------
+    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
+    event RelayerSet(address indexed oldRelayer, address indexed newRelayer);
+    event PrivateEngineSet(address indexed oldEngine, address indexed newEngine);
+
+    // Margin & settlement events (no sensitive params)
+    event MarginLocked(
         address indexed user,
+        bytes32 indexed positionId,
         string pairs,
-        bool isLong,
         uint256 margin,
-        uint256 leverage,
-        uint256 size,
-        uint256 entryPrice,
-        bytes32 pythTokenId,
-        uint256 liquidationPrice,
-        uint256 fees,
-        uint256 takeProfit,
-        uint256 stopLoss
-    );
-    event ClosePosition(
-        bytes32 indexed id,
-        address indexed user,
-        uint256 closePrice,
-        uint256 payout,
-        uint256 closeFee
-    );
-    event TpSlSet(
-        address indexed user,
-        bytes32 indexed positionId,
-        uint256 takeProfit,
-        uint256 stopLoss
-    );
-    event TpSlTriggered(
-        address indexed keeper,
-        address indexed user,
-        bytes32 indexed positionId,
-        string triggerType,
-        uint256 triggerPrice
-    );
-    event Liquidated(
-        address indexed keeper,
-        address indexed user,
-        bytes32 indexed positionId,
-        string pairs,
-        uint256 markPrice,
-        uint256 timestamp
-    );
-    event OwnershipTransferred(
-        address indexed oldOwner,
-        address indexed newOwner
+        uint256 fees
     );
 
-    // ---------- Ownership ----------
+    event PositionSettled(
+        address indexed user,
+        bytes32 indexed positionId,
+        int256 pnl,
+        uint256 payout,
+        uint256 closeFee,
+        string reason // "CLOSE", "TP", "SL", "LIQ"
+    );
+
+    // ---------- Modifiers ----------
     modifier onlyOwner() {
         require(msg.sender == owner, "Not admin");
+        _;
+    }
+
+    modifier onlyRelayer() {
+        require(msg.sender == relayer, "Not relayer");
         _;
     }
 
@@ -179,8 +97,50 @@ contract PerpDEX is ReentrancyGuard {
         usdt = ERC20(_usdt);
         pyth = IPyth(_pyth);
         owner = msg.sender;
+        usdtDecimals = ERC20(_usdt).decimals();
+
         emit OwnershipTransferred(address(0), msg.sender);
         _addInitialPairs();
+    }
+
+    // ---------- Admin ----------
+    function setRelayer(address _relayer) external onlyOwner {
+        emit RelayerSet(relayer, _relayer);
+        relayer = _relayer;
+    }
+
+    function setPrivateEngine(address _engine) external onlyOwner {
+        emit PrivateEngineSet(privateEngine, _engine);
+        privateEngine = _engine;
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Zero owner");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    // ---------- Username ----------
+    function registerUsername(string calldata name) external {
+        require(bytes(name).length >= 3 && bytes(name).length <= 32, "Bad length");
+        require(bytes(usernames[msg.sender]).length == 0, "Already registered");
+        require(usernameToAddress[name] == address(0), "Name taken");
+
+        usernames[msg.sender] = name;
+        usernameToAddress[name] = msg.sender;
+        emit UsernameRegistered(msg.sender, name);
+    }
+
+    function changeUsername(string calldata newName) external {
+        string memory current = usernames[msg.sender];
+        require(bytes(current).length > 0, "Not registered");
+        require(bytes(newName).length >= 3 && bytes(newName).length <= 32, "Bad length");
+        require(usernameToAddress[newName] == address(0), "Name taken");
+
+        delete usernameToAddress[current];
+        usernames[msg.sender] = newName;
+        usernameToAddress[newName] = msg.sender;
+        emit UsernameChanged(msg.sender, current, newName);
     }
 
     // ---------- Pair Management ----------
@@ -199,45 +159,38 @@ contract PerpDEX is ReentrancyGuard {
         );
     }
 
-    function addPairInternal(
-        string memory pairs,
-        bytes32 pythTokenId
-    ) internal {
+    function addPairInternal(string memory pairs, bytes32 pythTokenId) internal {
         pairInfo[pairs] = PairInfo(pairs, pythTokenId, true);
         allPairs.push(pairInfo[pairs]);
     }
 
+    function setPairActive(string calldata pairs, bool active) external onlyOwner {
+        PairInfo storage info = pairInfo[pairs];
+        require(bytes(info.name).length != 0, "Pair missing");
+        info.active = active;
+    }
+
     // ---------- Staking (LP Shares) ----------
-    /**
-     * @notice Stake USDT into the pool and receive LP shares.
-     * LP share price = totalStaked / totalShares
-     */
     function stake(uint256 amount) external nonReentrant {
         require(amount > 0, "Zero amount");
         usdt.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 mintShares;
         if (totalStaked == 0 || totalShares == 0) {
-            // First liquidity provider or reset: 1:1 mapping
-            mintShares = amount;
+            mintShares = amount * SHARE_SCALE;
         } else {
-            // Maintain proportional ownership
             mintShares = (amount * totalShares) / totalStaked;
         }
 
-        require(mintShares > 0, "Zero shares");
+        require(mintShares > 0, "Amount too small");
 
         totalStaked += amount;
-        shares[msg.sender] += mintShares;
         totalShares += mintShares;
+        shares[msg.sender] += mintShares;
 
         emit Staked(msg.sender, amount);
     }
 
-    /**
-     * @notice Unstake by burning LP shares and receive pro-rata USDT.
-     * @param shareAmount Amount of LP shares to burn.
-     */
     function unstake(uint256 shareAmount) external nonReentrant {
         require(shareAmount > 0, "Zero shares");
         require(shares[msg.sender] >= shareAmount, "Not enough shares");
@@ -254,12 +207,7 @@ contract PerpDEX is ReentrancyGuard {
         emit Unstaked(msg.sender, amountOut);
     }
 
-    // ---------- Core: Pool PnL ----------
-    /**
-     * @dev Positive pnl => trader win => pool loses.
-     *      Negative pnl => trader loss => pool gains.
-     *      This directly changes LP share price.
-     */
+    // ---------- Pool PnL Logic ----------
     function _applyPnLToPool(int256 pnl) internal {
         if (pnl > 0) {
             uint256 loss = uint256(pnl);
@@ -273,360 +221,77 @@ contract PerpDEX is ReentrancyGuard {
         }
     }
 
-    // ---------- Open Position ----------
-    function openPosition(
+    // ---------- Relayed Position Lifecycle ----------
+    /**
+     * @notice Called by relayer when opening a position.
+     * @dev
+     *  - Pulls margin from user (user must approve this contract).
+     *  - `fees` is computed off-chain by relayer (you can re-check limits here).
+     *  - FHE engine will store encrypted position data.
+     */
+    function lockMarginForPosition(
+        address user,
         string calldata pairs,
-        bool isLong,
+        bytes32 positionId,
         uint256 margin,
-        uint256 leverage,
-        uint256 takeProfit,
-        uint256 stopLoss
-    ) external nonReentrant {
-        require(margin > 0 && leverage > 0, "Bad params");
+        uint256 fees
+    ) external onlyRelayer nonReentrant {
+        require(margin > 0, "Zero margin");
+        require(fees <= margin, "Bad fee");
         PairInfo storage info = pairInfo[pairs];
         require(info.active, "Pair inactive");
-        usdt.safeTransferFrom(msg.sender, address(this), margin);
 
-        uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
+        // Pull funds from user
+        usdt.safeTransferFrom(user, address(this), margin);
+
         uint256 netMargin = margin - fees;
-        uint256 netSize = netMargin * leverage;
+        // All USDT remains inside contract; pool mechanics handled via PnL routing
 
-        // ---------- 1️⃣ Get current oracle price ----------
-        PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
-        require(token.price > 0, "Invalid price");
-        uint256 oraclePrice = _toUintPrice1e8(token);
-        uint256 entryPrice = applySpread(oraclePrice, isLong, true);
-
-        // ---------- 2️⃣ Validate TP/SL vs current oracle ----------
-        if (takeProfit > 0) {
-            if (isLong) {
-                require(takeProfit > oraclePrice, "Invalid Long TP");
-            } else {
-                require(takeProfit < oraclePrice, "Invalid Short TP");
-            }
-        }
-        if (stopLoss > 0) {
-            if (isLong) {
-                require(stopLoss < oraclePrice, "Invalid Long SL");
-            } else {
-                require(stopLoss > oraclePrice, "Invalid Short SL");
-            }
-        }
-
-        // ---------- 3️⃣ Calculate liquidation price ----------
-        uint256 liq = calculateLiquidationPrice(
-            entryPrice,
-            netSize,
-            netMargin,
-            isLong
-        );
-
-        bytes32 id = keccak256(
-            abi.encodePacked(msg.sender, pairs, block.timestamp, block.number)
-        );
-        PairFunding storage pf = pairFunding[pairs];
-
-        positions[msg.sender].push(
-            Position({
-                id: id,
-                pairs: pairs,
-                isLong: isLong,
-                margin: netMargin,
-                leverage: leverage,
-                size: netSize,
-                entryPrice: entryPrice,
-                pythTokenId: info.pythTokenId,
-                isClosed: false,
-                closePrice: 0,
-                payout: 0,
-                liquidationPrice: liq,
-                fees: fees,
-                fundingEntry: pf.growth,
-                takeProfit: takeProfit,
-                stopLoss: stopLoss
-            })
-        );
-
-        if (isLong) pf.oiLong += netSize;
-        else pf.oiShort += netSize;
-
-        emit OpenPosition(
-            id,
-            msg.sender,
-            pairs,
-            isLong,
-            netMargin,
-            leverage,
-            netSize,
-            entryPrice,
-            info.pythTokenId,
-            liq,
-            fees,
-            takeProfit,
-            stopLoss
-        );
+        emit MarginLocked(user, positionId, pairs, netMargin, fees);
+        // NOTE: relayer must separately call FHE private engine to store encrypted pos
     }
 
-    // ---------- Close Position ----------
-    function closePosition(bytes32 positionId) external nonReentrant {
-        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        uint256 mark = _toUintPrice1e8(token);
-
-        uint256 closePrice = mark; // no spread on close
-        int256 pnl = pos.isLong
-            ? (int256(pos.size) *
-                (int256(closePrice) - int256(pos.entryPrice))) /
-                int256(pos.entryPrice)
-            : (int256(pos.size) *
-                (int256(pos.entryPrice) - int256(closePrice))) /
-                int256(pos.entryPrice);
-
-        int256 rawPayout = int256(pos.margin) + pnl;
-        if (rawPayout < 0) rawPayout = 0;
-
-        uint256 payout = uint256(rawPayout);
-        uint256 closeFee = (payout * FEE_RATIO) / ONE;
-        uint256 netPayout = payout - closeFee;
-
-        _applyPnLToPool(pnl);
-        usdt.safeTransfer(msg.sender, netPayout);
-
-        pos.isClosed = true;
-        pos.closePrice = closePrice;
-        pos.payout = netPayout;
-
-        emit ClosePosition(
-            positionId,
-            msg.sender,
-            closePrice,
-            netPayout,
-            closeFee
-        );
-    }
-
-    // ---------- TP/SL Management ----------
-    function setTpSl(
+    /**
+     * @notice Called by relayer when closing / liquidating / TP/SL a position.
+     * @dev
+     *  - `pnl` is trader PnL in RAW USDT units (positive if trader wins).
+     *  - `payout` is net USDT sent to trader (after fees).
+     *  - `closeFee` is fee amount charged (optional, off-chain computed).
+     *  - `reason` is a lightweight string: "CLOSE", "TP", "SL", "LIQ".
+     *
+     *  In a fully trust-minimized design, `pnl/payout` must be proven via zk.
+     *  For now, we trust the relayer.
+     */
+    function settlePosition(
+        address user,
         bytes32 positionId,
-        uint256 newTp,
-        uint256 newSl
-    ) external nonReentrant {
-        Position storage pos = _getOpenPositionOf(msg.sender, positionId);
-        require(!pos.isClosed, "Position closed");
-
-        // ---------- 1️⃣ Get latest Pyth oracle price ----------
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        uint256 currentPrice = _toUintPrice1e8(token);
-        require(currentPrice > 0, "Invalid oracle price");
-
-        // ---------- 2️⃣ Validate take profit ----------
-        if (newTp > 0) {
-            if (pos.isLong) {
-                require(
-                    newTp > currentPrice,
-                    "Long TP must be above current price"
-                );
-            } else {
-                require(
-                    newTp < currentPrice,
-                    "Short TP must be below current price"
-                );
-            }
-            pos.takeProfit = newTp;
-        }
-
-        // ---------- 3️⃣ Validate stop loss ----------
-        if (newSl > 0) {
-            if (pos.isLong) {
-                require(
-                    newSl < currentPrice,
-                    "Long SL must be below current price"
-                );
-            } else {
-                require(
-                    newSl > currentPrice,
-                    "Short SL must be above current price"
-                );
-            }
-            pos.stopLoss = newSl;
-        }
-
-        emit TpSlSet(msg.sender, positionId, pos.takeProfit, pos.stopLoss);
-    }
-
-    function triggerTpSl(
-        address user,
-        bytes32 positionId
-    ) external nonReentrant {
-        Position storage pos = _getOpenPositionOf(user, positionId);
-        require(!pos.isClosed, "Already closed");
-
-        // ---------- 1️⃣ Get latest oracle price ----------
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        uint256 mark = _toUintPrice1e8(token);
-
-        bool hitTp = false;
-        bool hitSl = false;
-        uint256 triggerPrice = 0;
-        string memory triggerType;
-
-        if (pos.isLong) {
-            if (pos.takeProfit > 0 && mark >= pos.takeProfit) {
-                hitTp = true;
-                triggerPrice = pos.takeProfit;
-                triggerType = "TakeProfit";
-            } else if (pos.stopLoss > 0 && mark <= pos.stopLoss) {
-                hitSl = true;
-                triggerPrice = pos.stopLoss;
-                triggerType = "StopLoss";
-            }
-        } else {
-            if (pos.takeProfit > 0 && mark <= pos.takeProfit) {
-                hitTp = true;
-                triggerPrice = pos.takeProfit;
-                triggerType = "TakeProfit";
-            } else if (pos.stopLoss > 0 && mark >= pos.stopLoss) {
-                hitSl = true;
-                triggerPrice = pos.stopLoss;
-                triggerType = "StopLoss";
-            }
-        }
-
-        require(hitTp || hitSl, "No TP/SL hit");
-
-        // ---------- 2️⃣ Calculate PnL based on *exact TP/SL price* ----------
-        uint256 closePrice = triggerPrice;
-        int256 pnl = pos.isLong
-            ? (int256(pos.size) *
-                (int256(closePrice) - int256(pos.entryPrice))) /
-                int256(pos.entryPrice)
-            : (int256(pos.size) *
-                (int256(pos.entryPrice) - int256(closePrice))) /
-                int256(pos.entryPrice);
-
-        // ---------- 3️⃣ Compute payout and fees ----------
-        int256 rawPayout = int256(pos.margin) + pnl;
-        if (rawPayout < 0) rawPayout = 0;
-
-        uint256 payout = uint256(rawPayout);
-        uint256 closeFee = (payout * FEE_RATIO) / ONE;
-        uint256 netPayout = payout - closeFee;
-
-        // ---------- 4️⃣ Apply to pool and pay trader ----------
-        _applyPnLToPool(pnl);
-        usdt.safeTransfer(user, netPayout);
-
-        // ---------- 5️⃣ Mark position closed ----------
-        pos.isClosed = true;
-        pos.closePrice = closePrice;
-        pos.payout = netPayout;
-
-        emit TpSlTriggered(
-            msg.sender,
-            user,
-            positionId,
-            triggerType,
-            closePrice
-        );
-    }
-
-    // ---------- Liquidation ----------
-    function triggerLiquidation(
-        address user,
-        bytes32 positionId
-    ) external nonReentrant {
-        Position storage pos = _getOpenPositionOf(user, positionId);
-        require(!pos.isClosed, "Already closed");
-
-        // ---------- 1️⃣ Get latest oracle price ----------
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        uint256 mark = _toUintPrice1e8(token);
-        require(mark > 0, "Invalid oracle price");
-
-        bool canLiq = (pos.isLong && mark <= pos.liquidationPrice) ||
-            (!pos.isLong && mark >= pos.liquidationPrice);
-        require(canLiq, "Not liquidatable");
-
-        // ---------- 2️⃣ Calculate payout (losing position) ----------
-        uint256 closePrice = mark;
-        int256 pnl = pos.isLong
-            ? (int256(pos.size) *
-                (int256(closePrice) - int256(pos.entryPrice))) /
-                int256(pos.entryPrice)
-            : (int256(pos.size) *
-                (int256(pos.entryPrice) - int256(closePrice))) /
-                int256(pos.entryPrice);
-
-        int256 rawPayout = int256(pos.margin) + pnl;
-        if (rawPayout < 0) rawPayout = 0;
-
-        uint256 payout = uint256(rawPayout);
-        uint256 keeperReward = (payout * LIQUIDATION_REWARD_RATIO) / ONE; // e.g. 2%
-        uint256 traderReceive = payout > keeperReward
-            ? payout - keeperReward
-            : 0;
-
-        // ---------- 3️⃣ Apply to pool + transfers ----------
+        int256 pnl,
+        uint256 payout,
+        uint256 closeFee,
+        string calldata reason
+    ) external onlyRelayer nonReentrant {
+        // Apply PnL to LP pool
         _applyPnLToPool(pnl);
 
-        if (keeperReward > 0) usdt.safeTransfer(msg.sender, keeperReward);
-        if (traderReceive > 0) usdt.safeTransfer(user, traderReceive);
-
-        // ---------- 4️⃣ Update position ----------
-        pos.isClosed = true;
-        pos.closePrice = closePrice;
-        pos.payout = traderReceive;
-
-        emit Liquidated(
-            msg.sender,
-            user,
-            positionId,
-            pos.pairs,
-            mark,
-            block.timestamp
-        );
-    }
-
-    // ---------- Helpers ----------
-    function _getOpenPositionOf(
-        address user,
-        bytes32 positionId
-    ) internal view returns (Position storage) {
-        Position[] storage arr = positions[user];
-        for (uint256 i; i < arr.length; i++) {
-            if (!arr[i].isClosed && arr[i].id == positionId) return arr[i];
+        // Pay trader
+        if (payout > 0) {
+            usdt.safeTransfer(user, payout);
         }
-        revert("Position not found/already closed");
+
+        emit PositionSettled(user, positionId, pnl, payout, closeFee, reason);
+        // NOTE: relayer must also update FHE engine to mark position closed.
     }
 
-    function applySpread(
-        uint256 price,
-        bool isLong,
-        bool isEntry
-    ) internal pure returns (uint256) {
-        if (!isEntry) return price;
-        uint256 spread = (price * SPREAD_BPS) / 10000;
-        return isLong ? price + spread : price - spread;
-    }
+    // ---------- Oracle Helper ----------
+    function getPairOraclePrice1e8(string calldata pairs) external view returns (uint256) {
+        PairInfo storage info = pairInfo[pairs];
+        require(info.active, "Pair inactive");
 
-    function calculateLiquidationPrice(
-        uint256 entryPrice,
-        uint256 size,
-        uint256 margin,
-        bool isLong
-    ) internal pure returns (uint256) {
-        uint256 maintMargin = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
-        uint256 effectiveMargin = margin - maintMargin;
-        uint256 priceChange = (entryPrice * effectiveMargin) / size;
-        return isLong ? entryPrice - priceChange : entryPrice + priceChange;
-    }
+        PythStructs.Price memory token = pyth.getPrice(info.pythTokenId);
+        require(token.price > 0, "Bad price");
 
-    function _toUintPrice1e8(
-        PythStructs.Price memory p
-    ) internal pure returns (uint256) {
-        require(p.price > 0, "Bad price");
-        int256 v = int256(p.price);
-        int32 expo = p.expo;
+        int256 v = int256(token.price);
+        int32 expo = token.expo;
         int32 diff = -8 - expo;
         if (diff > 0) {
             for (int32 i; i < diff; i++) v *= 10;

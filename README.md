@@ -34,5 +34,5 @@ forge verify-contract \
   --rpc-url https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY \
   --verifier sourcify \
   --verifier-url 'https://sourcify.dev/server' \
-  0xB6bD4cd0EAbF0b8e55Cc06826585d0aEd440af4B \
+  0x1f75920BcFB8da23734f2963e241cAE3BbdD283B \
   src/PerpDex.sol:PerpDEX

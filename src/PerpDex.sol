@@ -3,9 +3,13 @@ pragma solidity ^0.8.20;
 
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
+
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import "lib/openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 
 contract PerpDEX {
+    using ECDSA for bytes32;
+
     IPyth public immutable pyth;
     ERC20 public immutable usdt;
 
@@ -14,6 +18,14 @@ contract PerpDEX {
     modifier onlyOwner() {
         require(msg.sender == owner, "Not admin");
         _;
+    }
+
+    // ---------- Oracle signer (off-chain backend) ----------
+    address public oracleSigner;
+
+    function setOracleSigner(address s) external onlyOwner {
+        require(s != address(0), "bad signer");
+        oracleSigner = s;
     }
 
     // ---------- Fixed-point base ----------
@@ -34,16 +46,16 @@ contract PerpDEX {
         bytes32 id;
         string pairs;
         bool isLong;
-        uint256 margin;
+        uint256 margin; // netMargin (after open fee)
         uint256 leverage;
-        uint256 size;
+        uint256 size; // position notional
         uint256 entryPrice;
         bytes32 pythTokenId;
         bool isClosed;
         uint256 closePrice;
         uint256 payout;
         uint256 liquidationPrice;
-        uint256 fees;
+        uint256 fees; // open fee
         int256 fundingEntry;
     }
 
@@ -63,11 +75,18 @@ contract PerpDEX {
     // ---------- Storage ----------
     mapping(address => Position[]) public positions;
     mapping(address => string) public username;
-
     mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
+
     PairInfo[] public allPairs;
     address[] public allUsers;
+
+    // ---------- LP Pool ----------
+    uint256 public totalLpShares;
+    mapping(address => uint256) public lpShares;
+
+    // Sum of margin locked in open positions (netMargin only)
+    uint256 public totalOpenMargin;
 
     // ---------- Events ----------
     event OpenPosition(
@@ -106,6 +125,10 @@ contract PerpDEX {
     );
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
 
+    // LP events
+    event LPDeposit(address indexed user, uint256 amount, uint256 shares);
+    event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
+
     // ---------- Constructor ----------
     constructor(address _usdt, address _pyth) {
         require(_usdt != address(0) && _pyth != address(0), "Invalid address");
@@ -121,7 +144,6 @@ contract PerpDEX {
 
     // ---------- Initial Pairs ----------
     function _addInitialPairs() internal {
-        // --- Tier 1 ---
         addPairInternal(
             "BTC_USD",
             0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
@@ -136,77 +158,31 @@ contract PerpDEX {
         );
         addPairInternal(
             "BNB_USD",
-            0x9446c2c3a3e4bd5e860f87d50986e2a38c2a99ce2c8bf0e27eaeedc038c45f5a
+            0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f
         );
-
-        // --- Tier 2 ---
         addPairInternal(
             "XRP_USD",
-            0x2c479522b2f7f46873c551d20b93257f8a555ba3b3f85c2e6aa1f3fa48a125a6
+            0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8
         );
         addPairInternal(
             "DOGE_USD",
-            0xe3740a8d5ac52df6c7fb1d9902e3f0f677cbcbbce8f9250ab297927651c01c75
+            0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c
         );
         addPairInternal(
-            "ADA_USD",
-            0x7abcfabf0d29e0c746ae8269664532c9b6e587f8515cdaf8cd0d063fe12fb6e9
-        );
-        addPairInternal(
-            "AVAX_USD",
-            0x99c9fcad6a22039f8a30dd6cf157d6762f9598a0b851a2eca40d767bc9f6b6e9
-        );
-        addPairInternal(
-            "DOT_USD",
-            0x06ce9f3722a8ee1bc74d2c4aa1bea1269234ab813a2dd8f04fbf0e466c0aa78e
-        );
-        addPairInternal(
-            "LINK_USD",
-            0x7cff55df4cd61b52dbb39d315b8e322ad9b2dd2acda6cd65a14e3b0d615b5fba
-        );
-
-        // --- Tier 3 ---
-        addPairInternal(
-            "MATIC_USD",
-            0xa2b2f4a868478bfae4c2a8e1d5c9961c3c2de1428c4933cfd5e7ed661dc57a41
-        );
-        addPairInternal(
-            "ARB_USD",
-            0x4c2a4f8b2ddb3f7e61a821a3d1d40d7b9050bc0f25bf3cce61a86342f3b15413
-        );
-        addPairInternal(
-            "OP_USD",
-            0x174a4c2a8e085e8f2fa2a343b3bf3cdea621ada5cef66216c0daac824bd8b020
-        );
-        addPairInternal(
-            "ATOM_USD",
-            0x26dbd2f19e0a9d5b5947f2a7bc01db57ee0ebf1d4c25a11f703e270d417c9e27
-        );
-        addPairInternal(
-            "NEAR_USD",
-            0xa3b522d07f0e5a53ce38adcb7631c6fba58898d2c0f473a223e7b2b1136f4e18
-        );
-
-        // --- Tier 4 ---
-        addPairInternal(
-            "APT_USD",
-            0x8d5508d64c9f32d438c523c4c7183762c508d57f075444ef32272acab56543fa
+            "HYPE_USD",
+            0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b
         );
         addPairInternal(
             "SUI_USD",
-            0x63b4e5b2de6301d3ba93926ab9dd98ec6053b457769278ade41b1a086e404f38
+            0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744
         );
         addPairInternal(
-            "TON_USD",
-            0x94f5a7d6a2f1f6ec0e1f8e8542343d0853788c5f6d3cbb3f315b2e878f8e3b44
+            "OP_USD",
+            0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf
         );
         addPairInternal(
-            "TRX_USD",
-            0x7092344747f29a8b2b5fcb1b61bf3eefec9e3ea364ab53976673f2dc16fc7d72
-        );
-        addPairInternal(
-            "SHIB_USD",
-            0x14addd41f6bb9915eddbb144a4bb6b0de2ac821f2d3b9fa9026fb7c6b1d10abf
+            "ARB_USD",
+            0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5
         );
     }
 
@@ -281,9 +257,83 @@ contract PerpDEX {
     // ---------- Users ----------
     function registerUser(string calldata _username) external {
         require(bytes(_username).length > 0, "Empty username");
-        if (bytes(username[msg.sender]).length == 0) allUsers.push(msg.sender);
+        if (bytes(username[msg.sender]).length == 0) {
+            allUsers.push(msg.sender);
+        }
         username[msg.sender] = _username;
         emit RegisterUser(msg.sender, _username);
+    }
+
+    function editUsername(string calldata _username) external {
+        require(bytes(_username).length > 0, "Empty username");
+        require(bytes(username[msg.sender]).length > 0, "Not registered");
+        username[msg.sender] = _username;
+        emit RegisterUser(msg.sender, _username);
+    }
+
+    // ===============================================================
+    // LP POOL LOGIC
+    // ===============================================================
+
+    /// @dev LP equity = USDT balance - totalOpenMargin
+    function getPoolValue() public view returns (uint256) {
+        uint256 bal = usdt.balanceOf(address(this));
+        if (bal > totalOpenMargin) {
+            return bal - totalOpenMargin;
+        }
+        return 0;
+    }
+
+    function getSharePrice() external view returns (uint256) {
+        if (totalLpShares == 0) return ONE;
+        uint256 pool = getPoolValue();
+        return (pool * ONE) / totalLpShares;
+    }
+
+    /// @notice Deposit USDT to the LP pool and receive LP shares
+    function depositLP(uint256 amount) external {
+        require(amount > 0, "amount=0");
+
+        uint256 poolBefore = getPoolValue();
+        uint256 shares;
+
+        if (totalLpShares == 0 || poolBefore == 0) {
+            // initial: 1:1
+            shares = amount;
+        } else {
+            shares = (amount * totalLpShares) / poolBefore;
+        }
+
+        require(shares > 0, "shares=0");
+
+        require(
+            usdt.transferFrom(msg.sender, address(this), amount),
+            "USDT transfer failed"
+        );
+
+        lpShares[msg.sender] += shares;
+        totalLpShares += shares;
+
+        emit LPDeposit(msg.sender, amount, shares);
+    }
+
+    /// @notice Withdraw USDT by burning LP shares
+    function withdrawLP(uint256 shares) external {
+        require(shares > 0, "shares=0");
+        uint256 userShares = lpShares[msg.sender];
+        require(userShares >= shares, "insufficient shares");
+
+        uint256 pool = getPoolValue();
+        require(pool > 0 && totalLpShares > 0, "empty pool");
+
+        uint256 amount = (shares * pool) / totalLpShares;
+        require(amount > 0, "amount=0");
+
+        lpShares[msg.sender] = userShares - shares;
+        totalLpShares -= shares;
+
+        require(usdt.transfer(msg.sender, amount), "USDT transfer failed");
+        emit LPWithdraw(msg.sender, amount, shares);
     }
 
     // ---------- Funding ----------
@@ -329,25 +379,67 @@ contract PerpDEX {
         pf.lastUpdate = block.timestamp;
     }
 
-    // ---------- Open / Close ----------
+    // ===============================================================
+    // ORACLE PRICE SIGNATURE VERIFICATION (OFF-CHAIN BACKEND)
+    // ===============================================================
+
+    function verifyPriceSignature(
+        string memory pairs,
+        uint256 price,
+        uint256 timestamp,
+        bytes calldata sig
+    ) public view returns (bool) {
+        bytes32 msgHash = keccak256(abi.encodePacked(pairs, price, timestamp));
+        bytes32 ethSigned = msgHash.toEthSignedMessageHash();
+        address recovered = ethSigned.recover(sig);
+        return recovered == oracleSigner;
+    }
+
+    // ===============================================================
+    // OPEN POSITION (uses signed OFF-CHAIN oracle)
+    // ===============================================================
+
     function openPosition(
         string calldata pairs,
         bool isLong,
         uint256 margin,
-        uint256 leverage
+        uint256 leverage,
+        uint256 oraclePrice,
+        uint256 oracleTimestamp,
+        bytes calldata oracleSignature
     ) external {
         require(margin > 0 && leverage > 0, "Bad margin/leverage");
+
         PairInfo storage info = pairInfo[pairs];
         require(info.active, "Pair not supported");
 
+        // Oracle freshness (5s window)
+        require(block.timestamp <= oracleTimestamp + 5, "Stale oracle price");
+
+        // Signature verification
+        require(
+            verifyPriceSignature(
+                pairs,
+                oraclePrice,
+                oracleTimestamp,
+                oracleSignature
+            ),
+            "Invalid oracle signature"
+        );
+
+        // Pull margin from trader
         require(
             usdt.transferFrom(msg.sender, address(this), margin),
             "USDT pull failed"
         );
 
+        // Fee + net margin
         uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
         uint256 netMargin = margin - fees;
         uint256 netSize = netMargin * leverage;
+
+        // Track locked margin for pool-equity calculations
+        totalOpenMargin += netMargin;
 
         _finalizeOpenPosition(
             pairs,
@@ -356,7 +448,8 @@ contract PerpDEX {
             leverage,
             netSize,
             info.pythTokenId,
-            fees
+            fees,
+            oraclePrice
         );
     }
 
@@ -367,15 +460,13 @@ contract PerpDEX {
         uint256 leverage,
         uint256 netSize,
         bytes32 pythTokenId,
-        uint256 fees
+        uint256 fees,
+        uint256 signedPrice
     ) internal {
         _accrueFunding(pairs);
 
-        PythStructs.Price memory token = pyth.getPrice(pythTokenId);
-        require(token.price > 0, "Invalid price");
+        uint256 entryPrice = applySpread(signedPrice, isLong, true);
 
-        uint256 oraclePrice = toUint(token.price);
-        uint256 entryPrice = applySpread(oraclePrice, isLong, true);
         uint256 liquidationPrice = calculateLiquidationPrice(
             entryPrice,
             netSize,
@@ -425,6 +516,10 @@ contract PerpDEX {
         );
     }
 
+    // ===============================================================
+    // CLOSE POSITION (PnL settled vs pool using Pyth price)
+    // ===============================================================
+
     function closePosition(bytes32 positionId) external {
         Position[] storage userPositions = positions[msg.sender];
         for (uint256 i = 0; i < userPositions.length; i++) {
@@ -437,14 +532,14 @@ contract PerpDEX {
         revert("Position not found/already closed");
     }
 
-    // ✅ Modified Close (no spread + fee on close)
     function _closePosition(address user, Position storage pos) internal {
         _accrueFunding(pos.pairs);
 
         PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
         require(token.price > 0, "Invalid price");
-        uint256 currentPrice = toUint(token.price); // ✅ No spread
+        uint256 currentPrice = toUint(token.price); // no spread on close
 
+        // Basic PnL formula
         int256 pnl = pos.isLong
             ? (int256(pos.size) *
                 (int256(currentPrice) - int256(pos.entryPrice))) /
@@ -460,15 +555,28 @@ contract PerpDEX {
         int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        // ✅ Apply close fee (same as FEE_RATIO)
+        // Close fee to pool
         uint256 closeFee = (payout * FEE_RATIO) / ONE;
         payout = payout > closeFee ? payout - closeFee : 0;
 
-        if (pos.isLong)
+        // Update OI
+        if (pos.isLong) {
             pf.oiLong = pf.oiLong >= pos.size ? pf.oiLong - pos.size : 0;
-        else pf.oiShort = pf.oiShort >= pos.size ? pf.oiShort - pos.size : 0;
+        } else {
+            pf.oiShort = pf.oiShort >= pos.size ? pf.oiShort - pos.size : 0;
+        }
 
-        if (payout > 0) usdt.transfer(user, payout);
+        // Release locked margin tracking
+        if (totalOpenMargin >= pos.margin) {
+            totalOpenMargin -= pos.margin;
+        } else {
+            totalOpenMargin = 0;
+        }
+
+        // Payout to trader comes from pool
+        if (payout > 0) {
+            require(usdt.transfer(user, payout), "USDT transfer failed");
+        }
 
         pos.isClosed = true;
         pos.closePrice = currentPrice;
@@ -477,29 +585,38 @@ contract PerpDEX {
         emit ClosePosition(pos.id, user, currentPrice, payout, closeFee);
     }
 
-    // ---------- Admin Close All ----------
+    // ===============================================================
+    // Admin: Close all positions
+    // ===============================================================
+
     function closeAllPositions() external onlyOwner {
         for (uint256 u = 0; u < allUsers.length; u++) {
             address user = allUsers[u];
             Position[] storage userPositions = positions[user];
             for (uint256 i = 0; i < userPositions.length; i++) {
                 Position storage pos = userPositions[i];
-                if (!pos.isClosed) _closePosition(user, pos);
+                if (!pos.isClosed) {
+                    _closePosition(user, pos);
+                }
             }
         }
         emit AllPositionsClosed(msg.sender, block.timestamp);
     }
 
-    // ---------- Helpers ----------
+    // ===============================================================
+    // Helpers
+    // ===============================================================
+
     function calculateLiquidationPrice(
         uint256 entryPrice,
         uint256 size,
         uint256 margin,
         bool isLong
     ) internal pure returns (uint256) {
-        uint256 maintMargin = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
-        uint256 effectiveMargin = margin - maintMargin;
-        uint256 priceChange = (entryPrice * effectiveMargin) / size;
+        uint256 maint = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
+        uint256 effective = margin - maint;
+        uint256 priceChange = (entryPrice * effective) / size;
+
         return isLong ? entryPrice - priceChange : entryPrice + priceChange;
     }
 
@@ -509,7 +626,9 @@ contract PerpDEX {
         bool isEntry
     ) internal pure returns (uint256) {
         uint256 spread = (price * SPREAD_BPS) / 10000;
-        if (isEntry) return isLong ? price + spread : price - spread;
+        if (isEntry) {
+            return isLong ? price + spread : price - spread;
+        }
         return isLong ? price - spread : price + spread;
     }
 

@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 
 contract PerpDEX {
     IPyth public immutable pyth;
@@ -18,26 +17,21 @@ contract PerpDEX {
         _;
     }
 
-    // ---------- Oracle signer (off-chain backend) ----------
-    address public oracleSigner;
-
-    function setOracleSigner(address s) external onlyOwner {
-        require(s != address(0), "bad signer");
-        oracleSigner = s;
-    }
-
     // ---------- Fixed-point base ----------
     uint256 public constant ONE = 1e18;
 
     // ---------- Economic Params ----------
-    uint256 public constant FEE_RATIO = 0;
-    uint256 public constant SPREAD_BPS = 0;
-    uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
+    uint256 public constant FEE_RATIO = 0; // 0% open/close fee (for now)
+    uint256 public constant SPREAD_BPS = 0; // 0 bps spread (for now)
+    uint256 public constant MAINTENANCE_MARGIN_RATIO = 0; // 0% =>  
     uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2% (currently unused)
 
-    uint256 public constant MAX_DAILY_FUNDING_BPS = 100; // 1% per day
+    uint256 public constant MAX_DAILY_FUNDING_BPS = 100; // 1% per day max
     uint256 public constant FUNDING_MAX_PER_SEC =
         ((ONE * MAX_DAILY_FUNDING_BPS) / 10000) / 86400;
+
+    // 🔥 Max PnL = 500% of margin (so profit <= 5x margin)
+    uint256 public constant MAX_PNL_RATIO = 5e18; // 500% expressed in 1e18 fixed-point
 
     // ---------- Data Models ----------
     struct Position {
@@ -336,7 +330,10 @@ contract PerpDEX {
         emit LPWithdraw(msg.sender, amount, shares);
     }
 
-    // ---------- Funding ----------
+    // ===============================================================
+    // FUNDING
+    // ===============================================================
+
     function updateFunding(string calldata pairs) public {
         _accrueFunding(pairs);
         PairFunding storage pf = pairFunding[pairs];
@@ -380,23 +377,27 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // ORACLE PRICE SIGNATURE VERIFICATION (OFF-CHAIN BACKEND)
-    // Option A: signature over (price, timestamp)
+    // PYTH HELPERS (PULL ORACLE)
     // ===============================================================
 
-    function verifyPriceSignature(
-        uint256 price,
-        uint256 timestamp,
-        bytes calldata sig
-    ) public view returns (bool) {
-        bytes32 msgHash = keccak256(abi.encodePacked(price, timestamp));
-        bytes32 ethSigned = ECDSA.toEthSignedMessageHash(msgHash);
-        address recovered = ECDSA.recover(ethSigned, sig);
-        return recovered == oracleSigner;
+    /// @dev Updates Pyth price feeds with fresh updateData (Hermes)
+    ///      and returns the current Price struct for the given priceId.
+    function _updateAndGetPythPrice(
+        bytes[] calldata priceUpdateData,
+        bytes32 priceId
+    ) internal returns (PythStructs.Price memory) {
+        uint256 fee = pyth.getUpdateFee(priceUpdateData);
+        require(msg.value >= fee, "Insufficient Pyth fee");
+        pyth.updatePriceFeeds{value: fee}(priceUpdateData);
+
+        // Now get the (fresh) price
+        PythStructs.Price memory p = pyth.getPrice(priceId);
+        require(p.price > 0, "Invalid Pyth price");
+        return p;
     }
 
     // ===============================================================
-    // OPEN POSITION (uses signed OFF-CHAIN oracle + TP/SL)
+    // OPEN POSITION (uses Pyth pull oracle)
     // ===============================================================
 
     function openPosition(
@@ -404,38 +405,34 @@ contract PerpDEX {
         bool isLong,
         uint256 margin,
         uint256 leverage,
-        uint256 oraclePrice,
-        uint256 oracleTimestamp,
-        bytes calldata oracleSignature,
+        bytes[] calldata priceUpdateData,
         uint256 takeProfit, // 0 = none
         uint256 stopLoss // 0 = none
-    ) external {
+    ) external payable {
         require(margin > 0 && leverage > 0, "Bad margin/leverage");
 
         PairInfo storage info = pairInfo[pairs];
         require(info.active, "Pair not supported");
 
-        // Oracle freshness (5s window)
-        require(block.timestamp <= oracleTimestamp + 15, "Stale oracle price");
-
-        // Signature verification (Option A)
-        require(
-            verifyPriceSignature(oraclePrice, oracleTimestamp, oracleSignature),
-            "Invalid oracle signature"
+        // 1) Update Pyth and get fresh price for this pair
+        PythStructs.Price memory token = _updateAndGetPythPrice(
+            priceUpdateData,
+            info.pythTokenId
         );
+        uint256 oraclePrice = toUint(token.price);
 
-        // Pull margin from trader
+        // 2) Pull margin from trader
         require(
             usdt.transferFrom(msg.sender, address(this), margin),
             "USDT pull failed"
         );
 
-        // Fee + net margin
+        // 3) Fee + net margin
         uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
         uint256 netMargin = margin - fees;
         uint256 netSize = netMargin * leverage;
 
-        // Track locked margin for pool-equity calculations
+        // 4) Track locked margin for pool-equity calculations
         totalOpenMargin += netMargin;
 
         _finalizeOpenPosition(
@@ -534,16 +531,6 @@ contract PerpDEX {
             Position storage pos = userPositions[i];
 
             if (pos.id == positionId && !pos.isClosed) {
-                // Optional directional checks (commented out to keep flexible)
-                // if (newTP > 0) {
-                //     if (pos.isLong) require(newTP > pos.entryPrice, "TP wrong side");
-                //     else require(newTP < pos.entryPrice, "TP wrong side");
-                // }
-                // if (newSL > 0) {
-                //     if (pos.isLong) require(newSL < pos.entryPrice, "SL wrong side");
-                //     else require(newSL > pos.entryPrice, "SL wrong side");
-                // }
-
                 if (newTP > 0) {
                     pos.takeProfit = newTP;
                 } else {
@@ -564,17 +551,22 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // CLOSE POSITION (manual close using Pyth price)
+    // CLOSE POSITION (manual close using fresh Pyth price)
     // ===============================================================
 
-    function closePosition(bytes32 positionId) external {
+    function closePosition(
+        bytes32 positionId,
+        bytes[] calldata priceUpdateData
+    ) external payable {
         Position[] storage userPositions = positions[msg.sender];
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
             if (!pos.isClosed && pos.id == positionId) {
-                // Fetch price from Pyth for manual close
-                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-                require(token.price > 0, "Invalid price");
+                // Fetch fresh price from Pyth for manual close
+                PythStructs.Price memory token = _updateAndGetPythPrice(
+                    priceUpdateData,
+                    pos.pythTokenId
+                );
                 uint256 currentPrice = toUint(token.price); // no spread on close
 
                 _closePosition(msg.sender, pos, currentPrice);
@@ -585,31 +577,27 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // TP/SL TRIGGER (bot) - close at oracle TP/SL price
+    // TP/SL TRIGGER (bot) - close at Pyth TP/SL price
     // ===============================================================
 
     function triggerTpSl(
         address user,
         bytes32 positionId,
-        uint256 oraclePrice,
-        uint256 oracleTimestamp,
-        bytes calldata oracleSignature
-    ) external {
-        // Oracle freshness (5s window)
-        require(block.timestamp <= oracleTimestamp + 15, "Stale oracle");
-
-        // Signature verification (Option A)
-        require(
-            verifyPriceSignature(oraclePrice, oracleTimestamp, oracleSignature),
-            "Invalid oracle signature"
-        );
-
+        bytes[] calldata priceUpdateData
+    ) external payable {
         Position[] storage userPositions = positions[user];
 
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
 
             if (pos.id == positionId && !pos.isClosed) {
+                // Fresh Pyth price
+                PythStructs.Price memory token = _updateAndGetPythPrice(
+                    priceUpdateData,
+                    pos.pythTokenId
+                );
+                uint256 oraclePrice = toUint(token.price);
+
                 bool hitTP = false;
                 bool hitSL = false;
 
@@ -632,6 +620,89 @@ contract PerpDEX {
 
                 // Close using oraclePrice (exact TP/SL execution)
                 _closePosition(user, pos, oraclePrice);
+
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ===============================================================
+    // LIQUIDATION (bot)
+    // ===============================================================
+
+    function liquidate(
+        address user,
+        bytes32 positionId,
+        bytes[] calldata priceUpdateData
+    ) external payable {
+        Position[] storage userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (pos.id == positionId && !pos.isClosed) {
+                // --- 1) Get fresh price from Pyth ---
+                PythStructs.Price memory token = _updateAndGetPythPrice(
+                    priceUpdateData,
+                    pos.pythTokenId
+                );
+                uint256 oraclePrice = toUint(token.price);
+
+                // --- 2) Compute PnL ---
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) *
+                        (int256(oraclePrice) - int256(pos.entryPrice))) /
+                        int256(pos.entryPrice)
+                    : (int256(pos.size) *
+                        (int256(pos.entryPrice) - int256(oraclePrice))) /
+                        int256(pos.entryPrice);
+
+                PairFunding storage pf = pairFunding[pos.pairs];
+                int256 fundingPayment = (int256(pos.size) *
+                    (pf.growth - pos.fundingEntry)) / int256(ONE);
+
+                int256 equity = int256(pos.margin) + pnl - fundingPayment;
+
+                // --- 3) Check liquidation condition ---
+                // MAINTENANCE_MARGIN = 0 → equity must be <= 0
+                require(equity <= 0, "Position not liquidatable");
+
+                // --- 4) Reduce OI ---
+                if (pos.isLong) {
+                    pf.oiLong = pf.oiLong >= pos.size
+                        ? pf.oiLong - pos.size
+                        : 0;
+                } else {
+                    pf.oiShort = pf.oiShort >= pos.size
+                        ? pf.oiShort - pos.size
+                        : 0;
+                }
+
+                // --- 5) Deduct locked margin ---
+                if (totalOpenMargin >= pos.margin) {
+                    totalOpenMargin -= pos.margin;
+                } else {
+                    totalOpenMargin = 0;
+                }
+
+                // --- 6) Liquidator reward (optional, currently disabled) ---
+                // uint256 reward = (pos.margin * LIQUIDATION_REWARD_RATIO) / ONE;
+                // if (reward > 0) usdt.transfer(msg.sender, reward);
+
+                // --- 7) No payout to trader, they lost margin ---
+                pos.isClosed = true;
+                pos.closePrice = oraclePrice;
+                pos.payout = 0;
+
+                emit ClosePosition(
+                    pos.id,
+                    user,
+                    oraclePrice,
+                    0,
+                    0 // no fee
+                );
 
                 return;
             }
@@ -664,10 +735,19 @@ contract PerpDEX {
         int256 fundingPayment = (int256(pos.size) *
             (pf.growth - pos.fundingEntry)) / int256(ONE);
 
-        int256 rawPayout = int256(pos.margin) + pnl - fundingPayment;
+        // 🔥 Cap PnL at +500% of margin
+        int256 cappedPnl = pnl;
+        if (cappedPnl > 0) {
+            int256 maxPnl = int256((pos.margin * MAX_PNL_RATIO) / ONE); // 5x margin
+            if (cappedPnl > maxPnl) {
+                cappedPnl = maxPnl;
+            }
+        }
+
+        int256 rawPayout = int256(pos.margin) + cappedPnl - fundingPayment;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        // Close fee to pool
+        // Close fee to pool (currently 0)
         uint256 closeFee = (payout * FEE_RATIO) / ONE;
         payout = payout > closeFee ? payout - closeFee : 0;
 
@@ -698,7 +778,7 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // Admin: Close all positions (using Pyth prices)
+    // Admin: Close all positions (emergency, uses whatever on-chain Pyth price)
     // ===============================================================
 
     function closeAllPositions() external onlyOwner {
@@ -732,7 +812,9 @@ contract PerpDEX {
         uint256 margin,
         bool isLong
     ) internal pure returns (uint256) {
-        uint256 maint = (margin * MAINTENANCE_MARGIN_RATIO) / ONE;
+        // With MAINTENANCE_MARGIN_RATIO = 0, this becomes bankruptcy price:
+        // priceChange = entryPrice * margin / size = entryPrice / leverage
+        uint256 maint = (margin * MAINTENANCE_MARGIN_RATIO) / ONE; // = 0 now
         uint256 effective = margin - maint;
         uint256 priceChange = (entryPrice * effective) / size;
 

@@ -31,6 +31,6 @@ forge verify-contract \
  --verifier etherscan \
  --etherscan-api-key $BLOCK_EXPLORER_API_KEY \
  --chain-id $CHAIN_ID \
- 0xDE303B4289Eae7D9d5a0586c2c7dc75A56B978C7 \
+ 0xA00F36447dbC45D201429eD2C836Ea6a53D11b11 \
  src/PerpDex.sol:PerpDEX \
  --watch

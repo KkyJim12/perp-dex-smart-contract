@@ -3,13 +3,10 @@ pragma solidity ^0.8.20;
 
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
-
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "lib/openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 
 contract PerpDEX {
-    using ECDSA for bytes32;
-
     IPyth public immutable pyth;
     ERC20 public immutable usdt;
 
@@ -390,8 +387,11 @@ contract PerpDEX {
         bytes calldata sig
     ) public view returns (bool) {
         bytes32 msgHash = keccak256(abi.encodePacked(pairs, price, timestamp));
-        bytes32 ethSigned = msgHash.toEthSignedMessageHash();
-        address recovered = ethSigned.recover(sig);
+
+        // ✅ Call as static library functions (no extension)
+        bytes32 ethSigned = ECDSA.toEthSignedMessageHash(msgHash);
+        address recovered = ECDSA.recover(ethSigned, sig);
+
         return recovered == oracleSigner;
     }
 

@@ -12,6 +12,7 @@ contract PerpDEX {
 
     // ---------- Ownership ----------
     address public owner;
+
     modifier onlyOwner() {
         require(msg.sender == owner, "Not admin");
         _;
@@ -29,10 +30,10 @@ contract PerpDEX {
     uint256 public constant ONE = 1e18;
 
     // ---------- Economic Params ----------
-    uint256 public constant FEE_RATIO = 5e14; // 0.05%
-    uint256 public constant SPREAD_BPS = 5; // 0.05%
+    uint256 public constant FEE_RATIO = 0;
+    uint256 public constant SPREAD_BPS = 0;
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 10e16; // 10%
-    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2%
+    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2% (currently unused)
 
     uint256 public constant MAX_DAILY_FUNDING_BPS = 100; // 1% per day
     uint256 public constant FUNDING_MAX_PER_SEC =
@@ -54,6 +55,8 @@ contract PerpDEX {
         uint256 liquidationPrice;
         uint256 fees; // open fee
         int256 fundingEntry;
+        uint256 takeProfit; // 0 = none
+        uint256 stopLoss; // 0 = none
     }
 
     struct PairFunding {
@@ -378,25 +381,22 @@ contract PerpDEX {
 
     // ===============================================================
     // ORACLE PRICE SIGNATURE VERIFICATION (OFF-CHAIN BACKEND)
+    // Option A: signature over (price, timestamp)
     // ===============================================================
 
     function verifyPriceSignature(
-        string memory pairs,
         uint256 price,
         uint256 timestamp,
         bytes calldata sig
     ) public view returns (bool) {
-        bytes32 msgHash = keccak256(abi.encodePacked(pairs, price, timestamp));
-
-        // ✅ Call as static library functions (no extension)
+        bytes32 msgHash = keccak256(abi.encodePacked(price, timestamp));
         bytes32 ethSigned = ECDSA.toEthSignedMessageHash(msgHash);
         address recovered = ECDSA.recover(ethSigned, sig);
-
         return recovered == oracleSigner;
     }
 
     // ===============================================================
-    // OPEN POSITION (uses signed OFF-CHAIN oracle)
+    // OPEN POSITION (uses signed OFF-CHAIN oracle + TP/SL)
     // ===============================================================
 
     function openPosition(
@@ -406,7 +406,9 @@ contract PerpDEX {
         uint256 leverage,
         uint256 oraclePrice,
         uint256 oracleTimestamp,
-        bytes calldata oracleSignature
+        bytes calldata oracleSignature,
+        uint256 takeProfit, // 0 = none
+        uint256 stopLoss // 0 = none
     ) external {
         require(margin > 0 && leverage > 0, "Bad margin/leverage");
 
@@ -414,16 +416,11 @@ contract PerpDEX {
         require(info.active, "Pair not supported");
 
         // Oracle freshness (5s window)
-        require(block.timestamp <= oracleTimestamp + 5, "Stale oracle price");
+        require(block.timestamp <= oracleTimestamp + 15, "Stale oracle price");
 
-        // Signature verification
+        // Signature verification (Option A)
         require(
-            verifyPriceSignature(
-                pairs,
-                oraclePrice,
-                oracleTimestamp,
-                oracleSignature
-            ),
+            verifyPriceSignature(oraclePrice, oracleTimestamp, oracleSignature),
             "Invalid oracle signature"
         );
 
@@ -449,7 +446,9 @@ contract PerpDEX {
             netSize,
             info.pythTokenId,
             fees,
-            oraclePrice
+            oraclePrice,
+            takeProfit,
+            stopLoss
         );
     }
 
@@ -461,7 +460,9 @@ contract PerpDEX {
         uint256 netSize,
         bytes32 pythTokenId,
         uint256 fees,
-        uint256 signedPrice
+        uint256 signedPrice,
+        uint256 tp,
+        uint256 sl
     ) internal {
         _accrueFunding(pairs);
 
@@ -494,7 +495,9 @@ contract PerpDEX {
                 payout: 0,
                 liquidationPrice: liquidationPrice,
                 fees: fees,
-                fundingEntry: pf.growth
+                fundingEntry: pf.growth,
+                takeProfit: tp,
+                stopLoss: sl
             })
         );
 
@@ -517,7 +520,51 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // CLOSE POSITION (PnL settled vs pool using Pyth price)
+    // MODIFY TP / SL
+    // ===============================================================
+
+    function modifyTpSl(
+        bytes32 positionId,
+        uint256 newTP,
+        uint256 newSL
+    ) external {
+        Position[] storage userPositions = positions[msg.sender];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (pos.id == positionId && !pos.isClosed) {
+                // Optional directional checks (commented out to keep flexible)
+                // if (newTP > 0) {
+                //     if (pos.isLong) require(newTP > pos.entryPrice, "TP wrong side");
+                //     else require(newTP < pos.entryPrice, "TP wrong side");
+                // }
+                // if (newSL > 0) {
+                //     if (pos.isLong) require(newSL < pos.entryPrice, "SL wrong side");
+                //     else require(newSL > pos.entryPrice, "SL wrong side");
+                // }
+
+                if (newTP > 0) {
+                    pos.takeProfit = newTP;
+                } else {
+                    pos.takeProfit = 0;
+                }
+
+                if (newSL > 0) {
+                    pos.stopLoss = newSL;
+                } else {
+                    pos.stopLoss = 0;
+                }
+
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ===============================================================
+    // CLOSE POSITION (manual close using Pyth price)
     // ===============================================================
 
     function closePosition(bytes32 positionId) external {
@@ -525,19 +572,84 @@ contract PerpDEX {
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
             if (!pos.isClosed && pos.id == positionId) {
-                _closePosition(msg.sender, pos);
+                // Fetch price from Pyth for manual close
+                PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
+                require(token.price > 0, "Invalid price");
+                uint256 currentPrice = toUint(token.price); // no spread on close
+
+                _closePosition(msg.sender, pos, currentPrice);
                 return;
             }
         }
         revert("Position not found/already closed");
     }
 
-    function _closePosition(address user, Position storage pos) internal {
-        _accrueFunding(pos.pairs);
+    // ===============================================================
+    // TP/SL TRIGGER (bot) - close at oracle TP/SL price
+    // ===============================================================
 
-        PythStructs.Price memory token = pyth.getPrice(pos.pythTokenId);
-        require(token.price > 0, "Invalid price");
-        uint256 currentPrice = toUint(token.price); // no spread on close
+    function triggerTpSl(
+        address user,
+        bytes32 positionId,
+        uint256 oraclePrice,
+        uint256 oracleTimestamp,
+        bytes calldata oracleSignature
+    ) external {
+        // Oracle freshness (5s window)
+        require(block.timestamp <= oracleTimestamp + 15, "Stale oracle");
+
+        // Signature verification (Option A)
+        require(
+            verifyPriceSignature(oraclePrice, oracleTimestamp, oracleSignature),
+            "Invalid oracle signature"
+        );
+
+        Position[] storage userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (pos.id == positionId && !pos.isClosed) {
+                bool hitTP = false;
+                bool hitSL = false;
+
+                // Long: TP if price >= TP, SL if price <= SL
+                // Short: TP if price <= TP, SL if price >= SL
+                if (pos.takeProfit > 0) {
+                    if (pos.isLong && oraclePrice >= pos.takeProfit)
+                        hitTP = true;
+                    if (!pos.isLong && oraclePrice <= pos.takeProfit)
+                        hitTP = true;
+                }
+
+                if (pos.stopLoss > 0) {
+                    if (pos.isLong && oraclePrice <= pos.stopLoss) hitSL = true;
+                    if (!pos.isLong && oraclePrice >= pos.stopLoss)
+                        hitSL = true;
+                }
+
+                require(hitTP || hitSL, "No TP/SL triggered");
+
+                // Close using oraclePrice (exact TP/SL execution)
+                _closePosition(user, pos, oraclePrice);
+
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ===============================================================
+    // Internal close logic (shared by manual close & TP/SL trigger)
+    // ===============================================================
+
+    function _closePosition(
+        address user,
+        Position storage pos,
+        uint256 currentPrice
+    ) internal {
+        _accrueFunding(pos.pairs);
 
         // Basic PnL formula
         int256 pnl = pos.isLong
@@ -586,7 +698,7 @@ contract PerpDEX {
     }
 
     // ===============================================================
-    // Admin: Close all positions
+    // Admin: Close all positions (using Pyth prices)
     // ===============================================================
 
     function closeAllPositions() external onlyOwner {
@@ -596,7 +708,14 @@ contract PerpDEX {
             for (uint256 i = 0; i < userPositions.length; i++) {
                 Position storage pos = userPositions[i];
                 if (!pos.isClosed) {
-                    _closePosition(user, pos);
+                    PythStructs.Price memory token = pyth.getPrice(
+                        pos.pythTokenId
+                    );
+                    if (token.price <= 0) {
+                        continue;
+                    }
+                    uint256 currentPrice = toUint(token.price);
+                    _closePosition(user, pos, currentPrice);
                 }
             }
         }

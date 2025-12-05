@@ -63,6 +63,7 @@ contract PerpDEX {
 
     mapping(address => Position[]) public positions;
     mapping(address => string) public username;
+    mapping(string => address) public usernameTaken;
     mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
 
@@ -140,34 +141,6 @@ contract PerpDEX {
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
-        addPairInternal(
-            "BNB_USD",
-            0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f
-        );
-        addPairInternal(
-            "XRP_USD",
-            0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8
-        );
-        addPairInternal(
-            "DOGE_USD",
-            0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c
-        );
-        addPairInternal(
-            "HYPE_USD",
-            0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b
-        );
-        addPairInternal(
-            "SUI_USD",
-            0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744
-        );
-        addPairInternal(
-            "OP_USD",
-            0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf
-        );
-        addPairInternal(
-            "ARB_USD",
-            0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5
-        );
     }
 
     function addPairInternal(
@@ -178,6 +151,30 @@ contract PerpDEX {
         allPairs.push(pairInfo[pairs]);
         emit PairAdded(pairs, pythTokenId);
         emit PairStatus(pairs, true);
+    }
+
+    // ------------------------------------------------------------------
+    // Register Username
+    // ------------------------------------------------------------------
+    function registerUsername(string calldata newName) external {
+        require(bytes(newName).length > 0, "Empty username");
+        require(usernameTaken[newName] == address(0), "Name already used");
+
+        string memory oldName = username[msg.sender];
+
+        // If user already had a username, free it
+        if (bytes(oldName).length > 0) {
+            usernameTaken[oldName] = address(0);
+        } else {
+            // New user → add to allUsers
+            allUsers.push(msg.sender);
+        }
+
+        // Assign new username
+        username[msg.sender] = newName;
+        usernameTaken[newName] = msg.sender;
+
+        emit RegisterUser(msg.sender, newName);
     }
 
     // ------------------------------------------------------------------

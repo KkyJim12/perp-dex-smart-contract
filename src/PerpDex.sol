@@ -96,7 +96,8 @@ contract PerpDEX {
         address indexed user,
         uint256 closePrice,
         uint256 payout,
-        uint256 closeFee
+        uint256 closeFee,
+        string status
     );
 
     event RegisterUser(address indexed userAddress, string username);
@@ -116,6 +117,12 @@ contract PerpDEX {
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
     event LPDeposit(address indexed user, uint256 amount, uint256 shares);
     event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
+    event TPSLModified(
+        bytes32 indexed positionId,
+        address indexed user,
+        uint256 newTakeProfit,
+        uint256 newStopLoss
+    );
 
     constructor(address _usdt, address _pyth) {
         require(_usdt != address(0) && _pyth != address(0), "Invalid address");
@@ -427,6 +434,8 @@ contract PerpDEX {
             if (pos.id == positionId && !pos.isClosed) {
                 pos.takeProfit = newTP;
                 pos.stopLoss = newSL;
+                
+                emit TPSLModified(positionId, msg.sender, newTP, newSL);
                 return;
             }
         }
@@ -454,7 +463,7 @@ contract PerpDEX {
                 );
                 uint256 currentPrice = toUint(token.price);
 
-                _closePosition(msg.sender, pos, currentPrice);
+                _closePosition(msg.sender, pos, currentPrice, "close");
                 return;
             }
         }
@@ -484,20 +493,33 @@ contract PerpDEX {
 
                 bool hitTP = false;
                 bool hitSL = false;
+                string memory status = "";
 
                 if (pos.takeProfit > 0) {
-                    if (pos.isLong && price >= pos.takeProfit) hitTP = true;
-                    if (!pos.isLong && price <= pos.takeProfit) hitTP = true;
+                    if (pos.isLong && price >= pos.takeProfit) {
+                        hitTP = true;
+                        status = "tp";
+                    }
+                    if (!pos.isLong && price <= pos.takeProfit) {
+                        hitTP = true;
+                        status = "tp";
+                    }
                 }
 
                 if (pos.stopLoss > 0) {
-                    if (pos.isLong && price <= pos.stopLoss) hitSL = true;
-                    if (!pos.isLong && price >= pos.stopLoss) hitSL = true;
+                    if (pos.isLong && price <= pos.stopLoss) {
+                        hitSL = true;
+                        status = "sl";
+                    }
+                    if (!pos.isLong && price >= pos.stopLoss) {
+                        hitSL = true;
+                        status = "sl";
+                    }
                 }
 
                 require(hitTP || hitSL, "No TP/SL triggered");
 
-                _closePosition(user, pos, price);
+                _closePosition(user, pos, price, status);
                 return;
             }
         }
@@ -560,7 +582,7 @@ contract PerpDEX {
                 pos.closePrice = price;
                 pos.payout = 0;
 
-                emit ClosePosition(pos.id, user, price, 0, 0);
+                emit ClosePosition(pos.id, user, price, 0, 0, "liquidate");
                 return;
             }
         }
@@ -575,7 +597,8 @@ contract PerpDEX {
     function _closePosition(
         address user,
         Position storage pos,
-        uint256 price
+        uint256 price,
+        string memory status
     ) internal {
         _accrueFunding(pos.pairs);
 
@@ -616,7 +639,7 @@ contract PerpDEX {
         pos.closePrice = price;
         pos.payout = payout;
 
-        emit ClosePosition(pos.id, user, price, payout, closeFee);
+        emit ClosePosition(pos.id, user, price, payout, closeFee, status);
     }
 
     // ------------------------------------------------------------------
@@ -638,7 +661,7 @@ contract PerpDEX {
                     if (token.price <= 0) continue;
 
                     uint256 price = toUint(token.price);
-                    _closePosition(user, pos, price);
+                    _closePosition(user, pos, price, "close");
                 }
             }
         }

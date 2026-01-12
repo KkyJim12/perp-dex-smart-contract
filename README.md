@@ -1,4 +1,4 @@
-#### BASE DEPLOY
+#### MONAD DEPLOY
 
 forge script script/MockUSDT.s.sol \
  --rpc-url $RPC_URL \
@@ -17,20 +17,21 @@ forge script script/PerpDex.s.sol:PerpDexScript \
 forge flatten src/MockUSDT.sol > flatten/MockUSDT_flat.sol
 forge flatten src/PerpDex.sol > flatten/PerpDex_flat.sol
 
-#### VERIFY ON BASE
+#### VERIFY ON MONAD
 
 forge verify-contract \
- --verifier etherscan \
- --etherscan-api-key $BLOCK_EXPLORER_API_KEY \
- --chain-id $CHAIN_ID \
- 0x1f75920BcFB8da23734f2963e241cAE3BbdD283B \
- src/MockUSDT.sol:MockUSDT \
- --watch
+  --rpc-url https://rpc.monad.xyz \
+  --verifier sourcify \
+  --verifier-url 'https://sourcify-api-monad.blockvision.org/' \
+  --chain-id 143 \
+  0x8CFf46281C0C3eeA94Dc43f75E710E6a4764c101 \
+  src/MockUSDT.sol:MockUSDT
 
 forge verify-contract \
- --verifier etherscan \
- --etherscan-api-key $BLOCK_EXPLORER_API_KEY \
- --chain-id $CHAIN_ID \
- 0xA00F36447dbC45D201429eD2C836Ea6a53D11b11 \
- src/PerpDex.sol:PerpDEX \
- --watch
+  --rpc-url https://rpc.monad.xyz \
+  --verifier sourcify \
+  --verifier-url 'https://sourcify-api-monad.blockvision.org/' \
+  --chain-id 143 \
+  0x83C16f2F40016eBcF076abdC07B21EF95312A74E \
+  src/PerpDex.sol:PerpDEX
+

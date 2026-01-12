@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0 ^0.8.20;
+pragma solidity >=0.4.16 >=0.6.2 >=0.8.4 ^0.8.0 ^0.8.20;
 
 // lib/openzeppelin-contracts/contracts/utils/Context.sol
 
-// OpenZeppelin Contracts v4.4.1 (utils/Context.sol)
+// OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)
 
 /**
  * @dev Provides information about the current execution context, including the
@@ -23,14 +23,18 @@ abstract contract Context {
     function _msgData() internal view virtual returns (bytes calldata) {
         return msg.data;
     }
+
+    function _contextSuffixLength() internal view virtual returns (uint256) {
+        return 0;
+    }
 }
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol
 
-// OpenZeppelin Contracts (last updated v4.9.0) (token/ERC20/IERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/IERC20.sol)
 
 /**
- * @dev Interface of the ERC20 standard as defined in the EIP.
+ * @dev Interface of the ERC-20 standard as defined in the ERC.
  */
 interface IERC20 {
     /**
@@ -48,23 +52,23 @@ interface IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
     /**
-     * @dev Returns the amount of tokens in existence.
+     * @dev Returns the value of tokens in existence.
      */
     function totalSupply() external view returns (uint256);
 
     /**
-     * @dev Returns the amount of tokens owned by `account`.
+     * @dev Returns the value of tokens owned by `account`.
      */
     function balanceOf(address account) external view returns (uint256);
 
     /**
-     * @dev Moves `amount` tokens from the caller's account to `to`.
+     * @dev Moves a `value` amount of tokens from the caller's account to `to`.
      *
      * Returns a boolean value indicating whether the operation succeeded.
      *
      * Emits a {Transfer} event.
      */
-    function transfer(address to, uint256 amount) external returns (bool);
+    function transfer(address to, uint256 value) external returns (bool);
 
     /**
      * @dev Returns the remaining number of tokens that `spender` will be
@@ -76,7 +80,8 @@ interface IERC20 {
     function allowance(address owner, address spender) external view returns (uint256);
 
     /**
-     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
+     * @dev Sets a `value` amount of tokens as the allowance of `spender` over the
+     * caller's tokens.
      *
      * Returns a boolean value indicating whether the operation succeeded.
      *
@@ -89,18 +94,18 @@ interface IERC20 {
      *
      * Emits an {Approval} event.
      */
-    function approve(address spender, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 value) external returns (bool);
 
     /**
-     * @dev Moves `amount` tokens from `from` to `to` using the
-     * allowance mechanism. `amount` is then deducted from the caller's
+     * @dev Moves a `value` amount of tokens from `from` to `to` using the
+     * allowance mechanism. `value` is then deducted from the caller's
      * allowance.
      *
      * Returns a boolean value indicating whether the operation succeeded.
      *
      * Emits a {Transfer} event.
      */
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
 }
 
 // lib/pyth-sdk-solidity/IPythEvents.sol
@@ -159,14 +164,174 @@ contract PythStructs {
     }
 }
 
-// lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol
+// lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol
 
-// OpenZeppelin Contracts v4.4.1 (token/ERC20/extensions/IERC20Metadata.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (interfaces/draft-IERC6093.sol)
 
 /**
- * @dev Interface for the optional metadata functions from the ERC20 standard.
- *
- * _Available since v4.1._
+ * @dev Standard ERC-20 Errors
+ * Interface of the https://eips.ethereum.org/EIPS/eip-6093[ERC-6093] custom errors for ERC-20 tokens.
+ */
+interface IERC20Errors {
+    /**
+     * @dev Indicates an error related to the current `balance` of a `sender`. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     * @param balance Current balance for the interacting account.
+     * @param needed Minimum amount required to perform a transfer.
+     */
+    error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed);
+
+    /**
+     * @dev Indicates a failure with the token `sender`. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     */
+    error ERC20InvalidSender(address sender);
+
+    /**
+     * @dev Indicates a failure with the token `receiver`. Used in transfers.
+     * @param receiver Address to which tokens are being transferred.
+     */
+    error ERC20InvalidReceiver(address receiver);
+
+    /**
+     * @dev Indicates a failure with the `spender`’s `allowance`. Used in transfers.
+     * @param spender Address that may be allowed to operate on tokens without being their owner.
+     * @param allowance Amount of tokens a `spender` is allowed to operate with.
+     * @param needed Minimum amount required to perform a transfer.
+     */
+    error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed);
+
+    /**
+     * @dev Indicates a failure with the `approver` of a token to be approved. Used in approvals.
+     * @param approver Address initiating an approval operation.
+     */
+    error ERC20InvalidApprover(address approver);
+
+    /**
+     * @dev Indicates a failure with the `spender` to be approved. Used in approvals.
+     * @param spender Address that may be allowed to operate on tokens without being their owner.
+     */
+    error ERC20InvalidSpender(address spender);
+}
+
+/**
+ * @dev Standard ERC-721 Errors
+ * Interface of the https://eips.ethereum.org/EIPS/eip-6093[ERC-6093] custom errors for ERC-721 tokens.
+ */
+interface IERC721Errors {
+    /**
+     * @dev Indicates that an address can't be an owner. For example, `address(0)` is a forbidden owner in ERC-20.
+     * Used in balance queries.
+     * @param owner Address of the current owner of a token.
+     */
+    error ERC721InvalidOwner(address owner);
+
+    /**
+     * @dev Indicates a `tokenId` whose `owner` is the zero address.
+     * @param tokenId Identifier number of a token.
+     */
+    error ERC721NonexistentToken(uint256 tokenId);
+
+    /**
+     * @dev Indicates an error related to the ownership over a particular token. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     * @param tokenId Identifier number of a token.
+     * @param owner Address of the current owner of a token.
+     */
+    error ERC721IncorrectOwner(address sender, uint256 tokenId, address owner);
+
+    /**
+     * @dev Indicates a failure with the token `sender`. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     */
+    error ERC721InvalidSender(address sender);
+
+    /**
+     * @dev Indicates a failure with the token `receiver`. Used in transfers.
+     * @param receiver Address to which tokens are being transferred.
+     */
+    error ERC721InvalidReceiver(address receiver);
+
+    /**
+     * @dev Indicates a failure with the `operator`’s approval. Used in transfers.
+     * @param operator Address that may be allowed to operate on tokens without being their owner.
+     * @param tokenId Identifier number of a token.
+     */
+    error ERC721InsufficientApproval(address operator, uint256 tokenId);
+
+    /**
+     * @dev Indicates a failure with the `approver` of a token to be approved. Used in approvals.
+     * @param approver Address initiating an approval operation.
+     */
+    error ERC721InvalidApprover(address approver);
+
+    /**
+     * @dev Indicates a failure with the `operator` to be approved. Used in approvals.
+     * @param operator Address that may be allowed to operate on tokens without being their owner.
+     */
+    error ERC721InvalidOperator(address operator);
+}
+
+/**
+ * @dev Standard ERC-1155 Errors
+ * Interface of the https://eips.ethereum.org/EIPS/eip-6093[ERC-6093] custom errors for ERC-1155 tokens.
+ */
+interface IERC1155Errors {
+    /**
+     * @dev Indicates an error related to the current `balance` of a `sender`. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     * @param balance Current balance for the interacting account.
+     * @param needed Minimum amount required to perform a transfer.
+     * @param tokenId Identifier number of a token.
+     */
+    error ERC1155InsufficientBalance(address sender, uint256 balance, uint256 needed, uint256 tokenId);
+
+    /**
+     * @dev Indicates a failure with the token `sender`. Used in transfers.
+     * @param sender Address whose tokens are being transferred.
+     */
+    error ERC1155InvalidSender(address sender);
+
+    /**
+     * @dev Indicates a failure with the token `receiver`. Used in transfers.
+     * @param receiver Address to which tokens are being transferred.
+     */
+    error ERC1155InvalidReceiver(address receiver);
+
+    /**
+     * @dev Indicates a failure with the `operator`’s approval. Used in transfers.
+     * @param operator Address that may be allowed to operate on tokens without being their owner.
+     * @param owner Address of the current owner of a token.
+     */
+    error ERC1155MissingApprovalForAll(address operator, address owner);
+
+    /**
+     * @dev Indicates a failure with the `approver` of a token to be approved. Used in approvals.
+     * @param approver Address initiating an approval operation.
+     */
+    error ERC1155InvalidApprover(address approver);
+
+    /**
+     * @dev Indicates a failure with the `operator` to be approved. Used in approvals.
+     * @param operator Address that may be allowed to operate on tokens without being their owner.
+     */
+    error ERC1155InvalidOperator(address operator);
+
+    /**
+     * @dev Indicates an array length mismatch between ids and values in a safeBatchTransferFrom operation.
+     * Used in batch transfers.
+     * @param idsLength Length of the array of token identifiers
+     * @param valuesLength Length of the array of token amounts
+     */
+    error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength);
+}
+
+// lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol
+
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/extensions/IERC20Metadata.sol)
+
+/**
+ * @dev Interface for the optional metadata functions from the ERC-20 standard.
  */
 interface IERC20Metadata is IERC20 {
     /**
@@ -323,14 +488,13 @@ interface IPyth is IPythEvents {
 
 // lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol
 
-// OpenZeppelin Contracts (last updated v4.9.0) (token/ERC20/ERC20.sol)
+// OpenZeppelin Contracts (last updated v5.4.0) (token/ERC20/ERC20.sol)
 
 /**
  * @dev Implementation of the {IERC20} interface.
  *
  * This implementation is agnostic to the way tokens are created. This means
  * that a supply mechanism has to be added in a derived contract using {_mint}.
- * For a generic mechanism see {ERC20PresetMinterPauser}.
  *
  * TIP: For a detailed writeup see our guide
  * https://forum.openzeppelin.com/t/how-to-implement-erc20-supply-mechanisms/226[How
@@ -341,22 +505,13 @@ interface IPyth is IPythEvents {
  *
  * We have followed general OpenZeppelin Contracts guidelines: functions revert
  * instead returning `false` on failure. This behavior is nonetheless
- * conventional and does not conflict with the expectations of ERC20
+ * conventional and does not conflict with the expectations of ERC-20
  * applications.
- *
- * Additionally, an {Approval} event is emitted on calls to {transferFrom}.
- * This allows applications to reconstruct the allowance for all accounts just
- * by listening to said events. Other implementations of the EIP may not emit
- * these events, as it isn't required by the specification.
- *
- * Finally, the non-standard {decreaseAllowance} and {increaseAllowance}
- * functions have been added to mitigate the well-known issues around setting
- * allowances. See {IERC20-approve}.
  */
-contract ERC20 is Context, IERC20, IERC20Metadata {
-    mapping(address => uint256) private _balances;
+abstract contract ERC20 is Context, IERC20, IERC20Metadata, IERC20Errors {
+    mapping(address account => uint256) private _balances;
 
-    mapping(address => mapping(address => uint256)) private _allowances;
+    mapping(address account => mapping(address spender => uint256)) private _allowances;
 
     uint256 private _totalSupply;
 
@@ -366,8 +521,7 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
     /**
      * @dev Sets the values for {name} and {symbol}.
      *
-     * All two of these values are immutable: they can only be set once during
-     * construction.
+     * Both values are immutable: they can only be set once during construction.
      */
     constructor(string memory name_, string memory symbol_) {
         _name = name_;
@@ -377,7 +531,7 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
     /**
      * @dev Returns the name of the token.
      */
-    function name() public view virtual override returns (string memory) {
+    function name() public view virtual returns (string memory) {
         return _name;
     }
 
@@ -385,7 +539,7 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      * @dev Returns the symbol of the token, usually a shorter version of the
      * name.
      */
-    function symbol() public view virtual override returns (string memory) {
+    function symbol() public view virtual returns (string memory) {
         return _symbol;
     }
 
@@ -402,21 +556,17 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      * no way affects any of the arithmetic of the contract, including
      * {IERC20-balanceOf} and {IERC20-transfer}.
      */
-    function decimals() public view virtual override returns (uint8) {
+    function decimals() public view virtual returns (uint8) {
         return 18;
     }
 
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
-    function totalSupply() public view virtual override returns (uint256) {
+    /// @inheritdoc IERC20
+    function totalSupply() public view virtual returns (uint256) {
         return _totalSupply;
     }
 
-    /**
-     * @dev See {IERC20-balanceOf}.
-     */
-    function balanceOf(address account) public view virtual override returns (uint256) {
+    /// @inheritdoc IERC20
+    function balanceOf(address account) public view virtual returns (uint256) {
         return _balances[account];
     }
 
@@ -426,42 +576,40 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      * Requirements:
      *
      * - `to` cannot be the zero address.
-     * - the caller must have a balance of at least `amount`.
+     * - the caller must have a balance of at least `value`.
      */
-    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+    function transfer(address to, uint256 value) public virtual returns (bool) {
         address owner = _msgSender();
-        _transfer(owner, to, amount);
+        _transfer(owner, to, value);
         return true;
     }
 
-    /**
-     * @dev See {IERC20-allowance}.
-     */
-    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+    /// @inheritdoc IERC20
+    function allowance(address owner, address spender) public view virtual returns (uint256) {
         return _allowances[owner][spender];
     }
 
     /**
      * @dev See {IERC20-approve}.
      *
-     * NOTE: If `amount` is the maximum `uint256`, the allowance is not updated on
+     * NOTE: If `value` is the maximum `uint256`, the allowance is not updated on
      * `transferFrom`. This is semantically equivalent to an infinite approval.
      *
      * Requirements:
      *
      * - `spender` cannot be the zero address.
      */
-    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+    function approve(address spender, uint256 value) public virtual returns (bool) {
         address owner = _msgSender();
-        _approve(owner, spender, amount);
+        _approve(owner, spender, value);
         return true;
     }
 
     /**
      * @dev See {IERC20-transferFrom}.
      *
-     * Emits an {Approval} event indicating the updated allowance. This is not
-     * required by the EIP. See the note at the beginning of {ERC20}.
+     * Skips emitting an {Approval} event indicating an allowance update. This is not
+     * required by the ERC. See {xref-ERC20-_approve-address-address-uint256-bool-}[_approve].
      *
      * NOTE: Does not update the allowance if the current allowance
      * is the maximum `uint256`.
@@ -469,149 +617,106 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      * Requirements:
      *
      * - `from` and `to` cannot be the zero address.
-     * - `from` must have a balance of at least `amount`.
+     * - `from` must have a balance of at least `value`.
      * - the caller must have allowance for ``from``'s tokens of at least
-     * `amount`.
+     * `value`.
      */
-    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+    function transferFrom(address from, address to, uint256 value) public virtual returns (bool) {
         address spender = _msgSender();
-        _spendAllowance(from, spender, amount);
-        _transfer(from, to, amount);
+        _spendAllowance(from, spender, value);
+        _transfer(from, to, value);
         return true;
     }
 
     /**
-     * @dev Atomically increases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     */
-    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-        address owner = _msgSender();
-        _approve(owner, spender, allowance(owner, spender) + addedValue);
-        return true;
-    }
-
-    /**
-     * @dev Atomically decreases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     * - `spender` must have allowance for the caller of at least
-     * `subtractedValue`.
-     */
-    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
-        address owner = _msgSender();
-        uint256 currentAllowance = allowance(owner, spender);
-        require(currentAllowance >= subtractedValue, "ERC20: decreased allowance below zero");
-        unchecked {
-            _approve(owner, spender, currentAllowance - subtractedValue);
-        }
-
-        return true;
-    }
-
-    /**
-     * @dev Moves `amount` of tokens from `from` to `to`.
+     * @dev Moves a `value` amount of tokens from `from` to `to`.
      *
      * This internal function is equivalent to {transfer}, and can be used to
      * e.g. implement automatic token fees, slashing mechanisms, etc.
      *
      * Emits a {Transfer} event.
      *
-     * Requirements:
-     *
-     * - `from` cannot be the zero address.
-     * - `to` cannot be the zero address.
-     * - `from` must have a balance of at least `amount`.
+     * NOTE: This function is not virtual, {_update} should be overridden instead.
      */
-    function _transfer(address from, address to, uint256 amount) internal virtual {
-        require(from != address(0), "ERC20: transfer from the zero address");
-        require(to != address(0), "ERC20: transfer to the zero address");
-
-        _beforeTokenTransfer(from, to, amount);
-
-        uint256 fromBalance = _balances[from];
-        require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
-        unchecked {
-            _balances[from] = fromBalance - amount;
-            // Overflow not possible: the sum of all balances is capped by totalSupply, and the sum is preserved by
-            // decrementing then incrementing.
-            _balances[to] += amount;
+    function _transfer(address from, address to, uint256 value) internal {
+        if (from == address(0)) {
+            revert ERC20InvalidSender(address(0));
         }
-
-        emit Transfer(from, to, amount);
-
-        _afterTokenTransfer(from, to, amount);
+        if (to == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
+        }
+        _update(from, to, value);
     }
 
-    /** @dev Creates `amount` tokens and assigns them to `account`, increasing
-     * the total supply.
+    /**
+     * @dev Transfers a `value` amount of tokens from `from` to `to`, or alternatively mints (or burns) if `from`
+     * (or `to`) is the zero address. All customizations to transfers, mints, and burns should be done by overriding
+     * this function.
+     *
+     * Emits a {Transfer} event.
+     */
+    function _update(address from, address to, uint256 value) internal virtual {
+        if (from == address(0)) {
+            // Overflow check required: The rest of the code assumes that totalSupply never overflows
+            _totalSupply += value;
+        } else {
+            uint256 fromBalance = _balances[from];
+            if (fromBalance < value) {
+                revert ERC20InsufficientBalance(from, fromBalance, value);
+            }
+            unchecked {
+                // Overflow not possible: value <= fromBalance <= totalSupply.
+                _balances[from] = fromBalance - value;
+            }
+        }
+
+        if (to == address(0)) {
+            unchecked {
+                // Overflow not possible: value <= totalSupply or value <= fromBalance <= totalSupply.
+                _totalSupply -= value;
+            }
+        } else {
+            unchecked {
+                // Overflow not possible: balance + value is at most totalSupply, which we know fits into a uint256.
+                _balances[to] += value;
+            }
+        }
+
+        emit Transfer(from, to, value);
+    }
+
+    /**
+     * @dev Creates a `value` amount of tokens and assigns them to `account`, by transferring it from address(0).
+     * Relies on the `_update` mechanism
      *
      * Emits a {Transfer} event with `from` set to the zero address.
      *
-     * Requirements:
-     *
-     * - `account` cannot be the zero address.
+     * NOTE: This function is not virtual, {_update} should be overridden instead.
      */
-    function _mint(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: mint to the zero address");
-
-        _beforeTokenTransfer(address(0), account, amount);
-
-        _totalSupply += amount;
-        unchecked {
-            // Overflow not possible: balance + amount is at most totalSupply + amount, which is checked above.
-            _balances[account] += amount;
+    function _mint(address account, uint256 value) internal {
+        if (account == address(0)) {
+            revert ERC20InvalidReceiver(address(0));
         }
-        emit Transfer(address(0), account, amount);
-
-        _afterTokenTransfer(address(0), account, amount);
+        _update(address(0), account, value);
     }
 
     /**
-     * @dev Destroys `amount` tokens from `account`, reducing the
-     * total supply.
+     * @dev Destroys a `value` amount of tokens from `account`, lowering the total supply.
+     * Relies on the `_update` mechanism.
      *
      * Emits a {Transfer} event with `to` set to the zero address.
      *
-     * Requirements:
-     *
-     * - `account` cannot be the zero address.
-     * - `account` must have at least `amount` tokens.
+     * NOTE: This function is not virtual, {_update} should be overridden instead
      */
-    function _burn(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: burn from the zero address");
-
-        _beforeTokenTransfer(account, address(0), amount);
-
-        uint256 accountBalance = _balances[account];
-        require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
-        unchecked {
-            _balances[account] = accountBalance - amount;
-            // Overflow not possible: amount <= accountBalance <= totalSupply.
-            _totalSupply -= amount;
+    function _burn(address account, uint256 value) internal {
+        if (account == address(0)) {
+            revert ERC20InvalidSender(address(0));
         }
-
-        emit Transfer(account, address(0), amount);
-
-        _afterTokenTransfer(account, address(0), amount);
+        _update(account, address(0), value);
     }
 
     /**
-     * @dev Sets `amount` as the allowance of `spender` over the `owner` s tokens.
+     * @dev Sets `value` as the allowance of `spender` over the `owner`'s tokens.
      *
      * This internal function is equivalent to `approve`, and can be used to
      * e.g. set automatic allowances for certain subsystems, etc.
@@ -622,64 +727,63 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      *
      * - `owner` cannot be the zero address.
      * - `spender` cannot be the zero address.
+     *
+     * Overrides to this logic should be done to the variant with an additional `bool emitEvent` argument.
      */
-    function _approve(address owner, address spender, uint256 amount) internal virtual {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-
-        _allowances[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
+    function _approve(address owner, address spender, uint256 value) internal {
+        _approve(owner, spender, value, true);
     }
 
     /**
-     * @dev Updates `owner` s allowance for `spender` based on spent `amount`.
+     * @dev Variant of {_approve} with an optional flag to enable or disable the {Approval} event.
      *
-     * Does not update the allowance amount in case of infinite allowance.
-     * Revert if not enough allowance is available.
+     * By default (when calling {_approve}) the flag is set to true. On the other hand, approval changes made by
+     * `_spendAllowance` during the `transferFrom` operation set the flag to false. This saves gas by not emitting any
+     * `Approval` event during `transferFrom` operations.
      *
-     * Might emit an {Approval} event.
+     * Anyone who wishes to continue emitting `Approval` events on the`transferFrom` operation can force the flag to
+     * true using the following override:
+     *
+     * ```solidity
+     * function _approve(address owner, address spender, uint256 value, bool) internal virtual override {
+     *     super._approve(owner, spender, value, true);
+     * }
+     * ```
+     *
+     * Requirements are the same as {_approve}.
      */
-    function _spendAllowance(address owner, address spender, uint256 amount) internal virtual {
-        uint256 currentAllowance = allowance(owner, spender);
-        if (currentAllowance != type(uint256).max) {
-            require(currentAllowance >= amount, "ERC20: insufficient allowance");
-            unchecked {
-                _approve(owner, spender, currentAllowance - amount);
-            }
+    function _approve(address owner, address spender, uint256 value, bool emitEvent) internal virtual {
+        if (owner == address(0)) {
+            revert ERC20InvalidApprover(address(0));
+        }
+        if (spender == address(0)) {
+            revert ERC20InvalidSpender(address(0));
+        }
+        _allowances[owner][spender] = value;
+        if (emitEvent) {
+            emit Approval(owner, spender, value);
         }
     }
 
     /**
-     * @dev Hook that is called before any transfer of tokens. This includes
-     * minting and burning.
+     * @dev Updates `owner`'s allowance for `spender` based on spent `value`.
      *
-     * Calling conditions:
+     * Does not update the allowance value in case of infinite allowance.
+     * Revert if not enough allowance is available.
      *
-     * - when `from` and `to` are both non-zero, `amount` of ``from``'s tokens
-     * will be transferred to `to`.
-     * - when `from` is zero, `amount` tokens will be minted for `to`.
-     * - when `to` is zero, `amount` of ``from``'s tokens will be burned.
-     * - `from` and `to` are never both zero.
-     *
-     * To learn more about hooks, head to xref:ROOT:extending-contracts.adoc#using-hooks[Using Hooks].
+     * Does not emit an {Approval} event.
      */
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual {}
-
-    /**
-     * @dev Hook that is called after any transfer of tokens. This includes
-     * minting and burning.
-     *
-     * Calling conditions:
-     *
-     * - when `from` and `to` are both non-zero, `amount` of ``from``'s tokens
-     * has been transferred to `to`.
-     * - when `from` is zero, `amount` tokens have been minted for `to`.
-     * - when `to` is zero, `amount` of ``from``'s tokens have been burned.
-     * - `from` and `to` are never both zero.
-     *
-     * To learn more about hooks, head to xref:ROOT:extending-contracts.adoc#using-hooks[Using Hooks].
-     */
-    function _afterTokenTransfer(address from, address to, uint256 amount) internal virtual {}
+    function _spendAllowance(address owner, address spender, uint256 value) internal virtual {
+        uint256 currentAllowance = allowance(owner, spender);
+        if (currentAllowance < type(uint256).max) {
+            if (currentAllowance < value) {
+                revert ERC20InsufficientAllowance(spender, currentAllowance, value);
+            }
+            unchecked {
+                _approve(owner, spender, currentAllowance - value, false);
+            }
+        }
+    }
 }
 
 // src/PerpDex.sol
@@ -688,7 +792,6 @@ contract PerpDEX {
     IPyth public immutable pyth;
     ERC20 public immutable usdt;
 
-    // ---------- Ownership ----------
     address public owner;
 
     modifier onlyOwner() {
@@ -696,40 +799,36 @@ contract PerpDEX {
         _;
     }
 
-    // ---------- Fixed-point base ----------
     uint256 public constant ONE = 1e18;
 
-    // ---------- Economic Params ----------
-    uint256 public constant FEE_RATIO = 0; // 0% open/close fee (for now)
-    uint256 public constant SPREAD_BPS = 0; // 0 bps spread (for now)
-    uint256 public constant MAINTENANCE_MARGIN_RATIO = 0; // 0% =>  
-    uint256 public constant LIQUIDATION_REWARD_RATIO = 2e16; // 2% (currently unused)
+    uint256 public constant FEE_RATIO = 0;
+    uint256 public constant SPREAD_BPS = 0;
+    uint256 public constant MAINTENANCE_MARGIN_RATIO = 0;
+    uint256 public constant LIQUIDATION_REWARD_RATIO = 0;
 
-    uint256 public constant MAX_DAILY_FUNDING_BPS = 100; // 1% per day max
+    uint256 public constant MAX_DAILY_FUNDING_BPS = 100;
     uint256 public constant FUNDING_MAX_PER_SEC =
         ((ONE * MAX_DAILY_FUNDING_BPS) / 10000) / 86400;
 
-    // 🔥 Max PnL = 500% of margin (so profit <= 5x margin)
-    uint256 public constant MAX_PNL_RATIO = 5e18; // 500% expressed in 1e18 fixed-point
+    uint256 public constant MAX_PNL_RATIO = 5e18; // 500%
 
-    // ---------- Data Models ----------
     struct Position {
         bytes32 id;
         string pairs;
         bool isLong;
-        uint256 margin; // netMargin (after open fee)
+        uint256 margin;
         uint256 leverage;
-        uint256 size; // position notional
+        uint256 size;
         uint256 entryPrice;
         bytes32 pythTokenId;
         bool isClosed;
         uint256 closePrice;
         uint256 payout;
         uint256 liquidationPrice;
-        uint256 fees; // open fee
+        uint256 fees;
         int256 fundingEntry;
-        uint256 takeProfit; // 0 = none
-        uint256 stopLoss; // 0 = none
+        uint256 takeProfit;
+        uint256 stopLoss;
     }
 
     struct PairFunding {
@@ -745,23 +844,20 @@ contract PerpDEX {
         bool active;
     }
 
-    // ---------- Storage ----------
     mapping(address => Position[]) public positions;
     mapping(address => string) public username;
+    mapping(string => address) public usernameTaken;
     mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
 
     PairInfo[] public allPairs;
     address[] public allUsers;
 
-    // ---------- LP Pool ----------
     uint256 public totalLpShares;
     mapping(address => uint256) public lpShares;
 
-    // Sum of margin locked in open positions (netMargin only)
     uint256 public totalOpenMargin;
 
-    // ---------- Events ----------
     event OpenPosition(
         bytes32 indexed id,
         address indexed user,
@@ -773,8 +869,11 @@ contract PerpDEX {
         uint256 entryPrice,
         bytes32 pythTokenId,
         uint256 liquidationPrice,
-        uint256 fees
+        uint256 fees,
+        uint256 takeProfit,
+        uint256 stopLoss
     );
+
     event ClosePosition(
         bytes32 indexed id,
         address indexed user,
@@ -782,6 +881,7 @@ contract PerpDEX {
         uint256 payout,
         uint256 closeFee
     );
+
     event RegisterUser(address indexed userAddress, string username);
     event FundingUpdated(
         string pairs,
@@ -797,12 +897,15 @@ contract PerpDEX {
         address indexed newOwner
     );
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
-
-    // LP events
     event LPDeposit(address indexed user, uint256 amount, uint256 shares);
     event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
+    event TPSLModified(
+        bytes32 indexed positionId,
+        address indexed user,
+        uint256 newTakeProfit,
+        uint256 newStopLoss
+    );
 
-    // ---------- Constructor ----------
     constructor(address _usdt, address _pyth) {
         require(_usdt != address(0) && _pyth != address(0), "Invalid address");
         usdt = ERC20(_usdt);
@@ -812,10 +915,8 @@ contract PerpDEX {
         _addInitialPairs();
     }
 
-    // ---------- Receive Native Token ----------
     receive() external payable {}
 
-    // ---------- Initial Pairs ----------
     function _addInitialPairs() internal {
         addPairInternal(
             "BTC_USD",
@@ -829,132 +930,49 @@ contract PerpDEX {
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
         );
-        addPairInternal(
-            "BNB_USD",
-            0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f
-        );
-        addPairInternal(
-            "XRP_USD",
-            0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8
-        );
-        addPairInternal(
-            "DOGE_USD",
-            0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c
-        );
-        addPairInternal(
-            "HYPE_USD",
-            0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b
-        );
-        addPairInternal(
-            "SUI_USD",
-            0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744
-        );
-        addPairInternal(
-            "OP_USD",
-            0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf
-        );
-        addPairInternal(
-            "ARB_USD",
-            0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5
-        );
     }
 
     function addPairInternal(
         string memory pairs,
         bytes32 pythTokenId
     ) internal {
-        pairInfo[pairs] = PairInfo({
-            name: pairs,
-            pythTokenId: pythTokenId,
-            active: true
-        });
+        pairInfo[pairs] = PairInfo(pairs, pythTokenId, true);
         allPairs.push(pairInfo[pairs]);
         emit PairAdded(pairs, pythTokenId);
         emit PairStatus(pairs, true);
     }
 
-    // ---------- Admin Pair Management ----------
-    function addPairBatch(
-        string[] calldata names,
-        bytes32[] calldata pythTokenIds
-    ) external onlyOwner {
-        require(names.length == pythTokenIds.length, "Length mismatch");
-        for (uint256 i = 0; i < names.length; i++) {
-            require(!pairInfo[names[i]].active, "Pair exists");
-            pairInfo[names[i]] = PairInfo({
-                name: names[i],
-                pythTokenId: pythTokenIds[i],
-                active: true
-            });
-            allPairs.push(pairInfo[names[i]]);
-            emit PairAdded(names[i], pythTokenIds[i]);
-            emit PairStatus(names[i], true);
-        }
-    }
+    // ------------------------------------------------------------------
+    // Register Username
+    // ------------------------------------------------------------------
+    function registerUsername(string calldata newName) external {
+        require(bytes(newName).length > 0, "Empty username");
+        require(usernameTaken[newName] == address(0), "Name already used");
 
-    function addPair(
-        string calldata pairs,
-        bytes32 pythTokenId
-    ) external onlyOwner {
-        require(!pairInfo[pairs].active, "Pair exists");
-        pairInfo[pairs] = PairInfo({
-            name: pairs,
-            pythTokenId: pythTokenId,
-            active: true
-        });
-        allPairs.push(pairInfo[pairs]);
-        emit PairAdded(pairs, pythTokenId);
-        emit PairStatus(pairs, true);
-    }
+        string memory oldName = username[msg.sender];
 
-    function setPairActive(
-        string calldata pairs,
-        bool active
-    ) external onlyOwner {
-        require(bytes(pairInfo[pairs].name).length > 0, "Pair unknown");
-        pairInfo[pairs].active = active;
-        emit PairStatus(pairs, active);
-    }
-
-    function getAllPairs() external view returns (PairInfo[] memory) {
-        return allPairs;
-    }
-
-    // ---------- Ownership ----------
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Bad owner");
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-
-    // ---------- Users ----------
-    function registerUser(string calldata _username) external {
-        require(bytes(_username).length > 0, "Empty username");
-        if (bytes(username[msg.sender]).length == 0) {
+        // If user already had a username, free it
+        if (bytes(oldName).length > 0) {
+            usernameTaken[oldName] = address(0);
+        } else {
+            // New user → add to allUsers
             allUsers.push(msg.sender);
         }
-        username[msg.sender] = _username;
-        emit RegisterUser(msg.sender, _username);
+
+        // Assign new username
+        username[msg.sender] = newName;
+        usernameTaken[newName] = msg.sender;
+
+        emit RegisterUser(msg.sender, newName);
     }
 
-    function editUsername(string calldata _username) external {
-        require(bytes(_username).length > 0, "Empty username");
-        require(bytes(username[msg.sender]).length > 0, "Not registered");
-        username[msg.sender] = _username;
-        emit RegisterUser(msg.sender, _username);
-    }
+    // ------------------------------------------------------------------
+    // LP POOL
+    // ------------------------------------------------------------------
 
-    // ===============================================================
-    // LP POOL LOGIC
-    // ===============================================================
-
-    /// @dev LP equity = USDT balance - totalOpenMargin
     function getPoolValue() public view returns (uint256) {
         uint256 bal = usdt.balanceOf(address(this));
-        if (bal > totalOpenMargin) {
-            return bal - totalOpenMargin;
-        }
-        return 0;
+        return bal > totalOpenMargin ? bal - totalOpenMargin : 0;
     }
 
     function getSharePrice() external view returns (uint256) {
@@ -963,55 +981,47 @@ contract PerpDEX {
         return (pool * ONE) / totalLpShares;
     }
 
-    /// @notice Deposit USDT to the LP pool and receive LP shares
     function depositLP(uint256 amount) external {
-        require(amount > 0, "amount=0");
-
+        require(amount > 0);
         uint256 poolBefore = getPoolValue();
-        uint256 shares;
 
-        if (totalLpShares == 0 || poolBefore == 0) {
-            // initial: 1:1
-            shares = amount;
-        } else {
-            shares = (amount * totalLpShares) / poolBefore;
-        }
+        uint256 shares = (totalLpShares == 0 || poolBefore == 0)
+            ? amount
+            : (amount * totalLpShares) / poolBefore;
 
-        require(shares > 0, "shares=0");
+        require(shares > 0);
 
         require(
             usdt.transferFrom(msg.sender, address(this), amount),
-            "USDT transfer failed"
+            "transfer failed"
         );
-
         lpShares[msg.sender] += shares;
         totalLpShares += shares;
 
         emit LPDeposit(msg.sender, amount, shares);
     }
 
-    /// @notice Withdraw USDT by burning LP shares
     function withdrawLP(uint256 shares) external {
-        require(shares > 0, "shares=0");
+        require(shares > 0);
         uint256 userShares = lpShares[msg.sender];
-        require(userShares >= shares, "insufficient shares");
+        require(userShares >= shares);
 
         uint256 pool = getPoolValue();
-        require(pool > 0 && totalLpShares > 0, "empty pool");
+        require(pool > 0);
 
         uint256 amount = (shares * pool) / totalLpShares;
-        require(amount > 0, "amount=0");
+        require(amount > 0);
 
         lpShares[msg.sender] = userShares - shares;
         totalLpShares -= shares;
 
-        require(usdt.transfer(msg.sender, amount), "USDT transfer failed");
+        require(usdt.transfer(msg.sender, amount), "transfer failed");
         emit LPWithdraw(msg.sender, amount, shares);
     }
 
-    // ===============================================================
+    // ------------------------------------------------------------------
     // FUNDING
-    // ===============================================================
+    // ------------------------------------------------------------------
 
     function updateFunding(string calldata pairs) public {
         _accrueFunding(pairs);
@@ -1028,6 +1038,7 @@ contract PerpDEX {
     function _accrueFunding(string memory pairs) internal {
         PairFunding storage pf = pairFunding[pairs];
         uint256 last = pf.lastUpdate;
+
         if (last == 0) {
             pf.lastUpdate = block.timestamp;
             return;
@@ -1036,18 +1047,19 @@ contract PerpDEX {
         uint256 dt = block.timestamp - last;
         if (dt == 0) return;
 
-        uint256 longOI = pf.oiLong;
-        uint256 shortOI = pf.oiShort;
-        uint256 totalOI = longOI + shortOI;
+        uint256 totalOI = pf.oiLong + pf.oiShort;
         if (totalOI == 0) {
             pf.lastUpdate = block.timestamp;
             return;
         }
 
-        uint256 diff = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
+        uint256 diff = pf.oiLong > pf.oiShort
+            ? pf.oiLong - pf.oiShort
+            : pf.oiShort - pf.oiLong;
         uint256 imbalanceRatio = (diff * ONE) / totalOI;
+
         uint256 magPerSec = (FUNDING_MAX_PER_SEC * imbalanceRatio) / ONE;
-        int256 signedPerSec = longOI >= shortOI
+        int256 signedPerSec = pf.oiLong >= pf.oiShort
             ? int256(magPerSec)
             : -int256(magPerSec);
 
@@ -1055,29 +1067,26 @@ contract PerpDEX {
         pf.lastUpdate = block.timestamp;
     }
 
-    // ===============================================================
-    // PYTH HELPERS (PULL ORACLE)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // ORACLE HELPERS
+    // ------------------------------------------------------------------
 
-    /// @dev Updates Pyth price feeds with fresh updateData (Hermes)
-    ///      and returns the current Price struct for the given priceId.
     function _updateAndGetPythPrice(
         bytes[] calldata priceUpdateData,
         bytes32 priceId
     ) internal returns (PythStructs.Price memory) {
         uint256 fee = pyth.getUpdateFee(priceUpdateData);
-        require(msg.value >= fee, "Insufficient Pyth fee");
+        require(msg.value >= fee);
         pyth.updatePriceFeeds{value: fee}(priceUpdateData);
 
-        // Now get the (fresh) price
         PythStructs.Price memory p = pyth.getPrice(priceId);
-        require(p.price > 0, "Invalid Pyth price");
+        require(p.price > 0);
         return p;
     }
 
-    // ===============================================================
-    // OPEN POSITION (uses Pyth pull oracle)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // OPEN POSITION
+    // ------------------------------------------------------------------
 
     function openPosition(
         string calldata pairs,
@@ -1085,33 +1094,25 @@ contract PerpDEX {
         uint256 margin,
         uint256 leverage,
         bytes[] calldata priceUpdateData,
-        uint256 takeProfit, // 0 = none
-        uint256 stopLoss // 0 = none
+        uint256 takeProfit,
+        uint256 stopLoss
     ) external payable {
-        require(margin > 0 && leverage > 0, "Bad margin/leverage");
-
+        require(margin > 0 && leverage > 0);
         PairInfo storage info = pairInfo[pairs];
-        require(info.active, "Pair not supported");
+        require(info.active);
 
-        // 1) Update Pyth and get fresh price for this pair
         PythStructs.Price memory token = _updateAndGetPythPrice(
             priceUpdateData,
             info.pythTokenId
         );
         uint256 oraclePrice = toUint(token.price);
 
-        // 2) Pull margin from trader
-        require(
-            usdt.transferFrom(msg.sender, address(this), margin),
-            "USDT pull failed"
-        );
+        require(usdt.transferFrom(msg.sender, address(this), margin));
 
-        // 3) Fee + net margin
         uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
         uint256 netMargin = margin - fees;
         uint256 netSize = netMargin * leverage;
 
-        // 4) Track locked margin for pool-equity calculations
         totalOpenMargin += netMargin;
 
         _finalizeOpenPosition(
@@ -1154,27 +1155,28 @@ contract PerpDEX {
         bytes32 id = keccak256(
             abi.encodePacked(msg.sender, block.timestamp, block.number)
         );
+
         PairFunding storage pf = pairFunding[pairs];
 
         positions[msg.sender].push(
-            Position({
-                id: id,
-                pairs: pairs,
-                isLong: isLong,
-                margin: netMargin,
-                leverage: leverage,
-                size: netSize,
-                entryPrice: entryPrice,
-                pythTokenId: pythTokenId,
-                isClosed: false,
-                closePrice: 0,
-                payout: 0,
-                liquidationPrice: liquidationPrice,
-                fees: fees,
-                fundingEntry: pf.growth,
-                takeProfit: tp,
-                stopLoss: sl
-            })
+            Position(
+                id,
+                pairs,
+                isLong,
+                netMargin,
+                leverage,
+                netSize,
+                entryPrice,
+                pythTokenId,
+                false,
+                0,
+                0,
+                liquidationPrice,
+                fees,
+                pf.growth,
+                tp,
+                sl
+            )
         );
 
         if (isLong) pf.oiLong += netSize;
@@ -1191,13 +1193,15 @@ contract PerpDEX {
             entryPrice,
             pythTokenId,
             liquidationPrice,
-            fees
+            fees,
+            tp,
+            sl
         );
     }
 
-    // ===============================================================
+    // ------------------------------------------------------------------
     // MODIFY TP / SL
-    // ===============================================================
+    // ------------------------------------------------------------------
 
     function modifyTpSl(
         bytes32 positionId,
@@ -1210,18 +1214,10 @@ contract PerpDEX {
             Position storage pos = userPositions[i];
 
             if (pos.id == positionId && !pos.isClosed) {
-                if (newTP > 0) {
-                    pos.takeProfit = newTP;
-                } else {
-                    pos.takeProfit = 0;
-                }
-
-                if (newSL > 0) {
-                    pos.stopLoss = newSL;
-                } else {
-                    pos.stopLoss = 0;
-                }
-
+                pos.takeProfit = newTP;
+                pos.stopLoss = newSL;
+                
+                emit TPSLModified(positionId, msg.sender, newTP, newSL);
                 return;
             }
         }
@@ -1229,35 +1225,36 @@ contract PerpDEX {
         revert("Position not found");
     }
 
-    // ===============================================================
-    // CLOSE POSITION (manual close using fresh Pyth price)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // CLOSE POSITION (manual close)
+    // ------------------------------------------------------------------
 
     function closePosition(
         bytes32 positionId,
         bytes[] calldata priceUpdateData
     ) external payable {
         Position[] storage userPositions = positions[msg.sender];
+
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
+
             if (!pos.isClosed && pos.id == positionId) {
-                // Fetch fresh price from Pyth for manual close
                 PythStructs.Price memory token = _updateAndGetPythPrice(
                     priceUpdateData,
                     pos.pythTokenId
                 );
-                uint256 currentPrice = toUint(token.price); // no spread on close
+                uint256 currentPrice = toUint(token.price);
 
                 _closePosition(msg.sender, pos, currentPrice);
                 return;
             }
         }
-        revert("Position not found/already closed");
+        revert("Position not found");
     }
 
-    // ===============================================================
-    // TP/SL TRIGGER (bot) - close at Pyth TP/SL price
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // TP/SL BOT
+    // ------------------------------------------------------------------
 
     function triggerTpSl(
         address user,
@@ -1269,37 +1266,29 @@ contract PerpDEX {
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
 
-            if (pos.id == positionId && !pos.isClosed) {
-                // Fresh Pyth price
+            if (!pos.isClosed && pos.id == positionId) {
                 PythStructs.Price memory token = _updateAndGetPythPrice(
                     priceUpdateData,
                     pos.pythTokenId
                 );
-                uint256 oraclePrice = toUint(token.price);
+                uint256 price = toUint(token.price);
 
                 bool hitTP = false;
                 bool hitSL = false;
 
-                // Long: TP if price >= TP, SL if price <= SL
-                // Short: TP if price <= TP, SL if price >= SL
                 if (pos.takeProfit > 0) {
-                    if (pos.isLong && oraclePrice >= pos.takeProfit)
-                        hitTP = true;
-                    if (!pos.isLong && oraclePrice <= pos.takeProfit)
-                        hitTP = true;
+                    if (pos.isLong && price >= pos.takeProfit) hitTP = true;
+                    if (!pos.isLong && price <= pos.takeProfit) hitTP = true;
                 }
 
                 if (pos.stopLoss > 0) {
-                    if (pos.isLong && oraclePrice <= pos.stopLoss) hitSL = true;
-                    if (!pos.isLong && oraclePrice >= pos.stopLoss)
-                        hitSL = true;
+                    if (pos.isLong && price <= pos.stopLoss) hitSL = true;
+                    if (!pos.isLong && price >= pos.stopLoss) hitSL = true;
                 }
 
                 require(hitTP || hitSL, "No TP/SL triggered");
 
-                // Close using oraclePrice (exact TP/SL execution)
-                _closePosition(user, pos, oraclePrice);
-
+                _closePosition(user, pos, price);
                 return;
             }
         }
@@ -1307,9 +1296,9 @@ contract PerpDEX {
         revert("Position not found");
     }
 
-    // ===============================================================
-    // LIQUIDATION (bot)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // LIQUIDATION
+    // ------------------------------------------------------------------
 
     function liquidate(
         address user,
@@ -1321,21 +1310,19 @@ contract PerpDEX {
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
 
-            if (pos.id == positionId && !pos.isClosed) {
-                // --- 1) Get fresh price from Pyth ---
+            if (!pos.isClosed && pos.id == positionId) {
                 PythStructs.Price memory token = _updateAndGetPythPrice(
                     priceUpdateData,
                     pos.pythTokenId
                 );
-                uint256 oraclePrice = toUint(token.price);
+                uint256 price = toUint(token.price);
 
-                // --- 2) Compute PnL ---
                 int256 pnl = pos.isLong
                     ? (int256(pos.size) *
-                        (int256(oraclePrice) - int256(pos.entryPrice))) /
+                        (int256(price) - int256(pos.entryPrice))) /
                         int256(pos.entryPrice)
                     : (int256(pos.size) *
-                        (int256(pos.entryPrice) - int256(oraclePrice))) /
+                        (int256(pos.entryPrice) - int256(price))) /
                         int256(pos.entryPrice);
 
                 PairFunding storage pf = pairFunding[pos.pairs];
@@ -1344,11 +1331,8 @@ contract PerpDEX {
 
                 int256 equity = int256(pos.margin) + pnl - fundingPayment;
 
-                // --- 3) Check liquidation condition ---
-                // MAINTENANCE_MARGIN = 0 → equity must be <= 0
-                require(equity <= 0, "Position not liquidatable");
+                require(equity <= 0, "Not liquidatable");
 
-                // --- 4) Reduce OI ---
                 if (pos.isLong) {
                     pf.oiLong = pf.oiLong >= pos.size
                         ? pf.oiLong - pos.size
@@ -1359,30 +1343,15 @@ contract PerpDEX {
                         : 0;
                 }
 
-                // --- 5) Deduct locked margin ---
-                if (totalOpenMargin >= pos.margin) {
+                if (totalOpenMargin >= pos.margin)
                     totalOpenMargin -= pos.margin;
-                } else {
-                    totalOpenMargin = 0;
-                }
+                else totalOpenMargin = 0;
 
-                // --- 6) Liquidator reward (optional, currently disabled) ---
-                // uint256 reward = (pos.margin * LIQUIDATION_REWARD_RATIO) / ONE;
-                // if (reward > 0) usdt.transfer(msg.sender, reward);
-
-                // --- 7) No payout to trader, they lost margin ---
                 pos.isClosed = true;
-                pos.closePrice = oraclePrice;
+                pos.closePrice = price;
                 pos.payout = 0;
 
-                emit ClosePosition(
-                    pos.id,
-                    user,
-                    oraclePrice,
-                    0,
-                    0 // no fee
-                );
-
+                emit ClosePosition(pos.id, user, price, 0, 0);
                 return;
             }
         }
@@ -1390,100 +1359,87 @@ contract PerpDEX {
         revert("Position not found");
     }
 
-    // ===============================================================
-    // Internal close logic (shared by manual close & TP/SL trigger)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // INTERNAL CLOSE LOGIC
+    // ------------------------------------------------------------------
 
     function _closePosition(
         address user,
         Position storage pos,
-        uint256 currentPrice
+        uint256 price
     ) internal {
         _accrueFunding(pos.pairs);
 
-        // Basic PnL formula
         int256 pnl = pos.isLong
-            ? (int256(pos.size) *
-                (int256(currentPrice) - int256(pos.entryPrice))) /
+            ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) /
                 int256(pos.entryPrice)
-            : (int256(pos.size) *
-                (int256(pos.entryPrice) - int256(currentPrice))) /
+            : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) /
                 int256(pos.entryPrice);
 
         PairFunding storage pf = pairFunding[pos.pairs];
         int256 fundingPayment = (int256(pos.size) *
             (pf.growth - pos.fundingEntry)) / int256(ONE);
 
-        // 🔥 Cap PnL at +500% of margin
         int256 cappedPnl = pnl;
         if (cappedPnl > 0) {
-            int256 maxPnl = int256((pos.margin * MAX_PNL_RATIO) / ONE); // 5x margin
-            if (cappedPnl > maxPnl) {
-                cappedPnl = maxPnl;
-            }
+            int256 maxPnl = int256((pos.margin * MAX_PNL_RATIO) / ONE);
+            if (cappedPnl > maxPnl) cappedPnl = maxPnl;
         }
 
         int256 rawPayout = int256(pos.margin) + cappedPnl - fundingPayment;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        // Close fee to pool (currently 0)
         uint256 closeFee = (payout * FEE_RATIO) / ONE;
         payout = payout > closeFee ? payout - closeFee : 0;
 
-        // Update OI
         if (pos.isLong) {
             pf.oiLong = pf.oiLong >= pos.size ? pf.oiLong - pos.size : 0;
         } else {
             pf.oiShort = pf.oiShort >= pos.size ? pf.oiShort - pos.size : 0;
         }
 
-        // Release locked margin tracking
-        if (totalOpenMargin >= pos.margin) {
-            totalOpenMargin -= pos.margin;
-        } else {
-            totalOpenMargin = 0;
-        }
+        if (totalOpenMargin >= pos.margin) totalOpenMargin -= pos.margin;
+        else totalOpenMargin = 0;
 
-        // Payout to trader comes from pool
-        if (payout > 0) {
-            require(usdt.transfer(user, payout), "USDT transfer failed");
-        }
+        if (payout > 0) require(usdt.transfer(user, payout));
 
         pos.isClosed = true;
-        pos.closePrice = currentPrice;
+        pos.closePrice = price;
         pos.payout = payout;
 
-        emit ClosePosition(pos.id, user, currentPrice, payout, closeFee);
+        emit ClosePosition(pos.id, user, price, payout, closeFee);
     }
 
-    // ===============================================================
-    // Admin: Close all positions (emergency, uses whatever on-chain Pyth price)
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // ADMIN EMERGENCY CLOSE ALL
+    // ------------------------------------------------------------------
 
     function closeAllPositions() external onlyOwner {
         for (uint256 u = 0; u < allUsers.length; u++) {
             address user = allUsers[u];
             Position[] storage userPositions = positions[user];
+
             for (uint256 i = 0; i < userPositions.length; i++) {
                 Position storage pos = userPositions[i];
+
                 if (!pos.isClosed) {
                     PythStructs.Price memory token = pyth.getPrice(
                         pos.pythTokenId
                     );
-                    if (token.price <= 0) {
-                        continue;
-                    }
-                    uint256 currentPrice = toUint(token.price);
-                    _closePosition(user, pos, currentPrice);
+                    if (token.price <= 0) continue;
+
+                    uint256 price = toUint(token.price);
+                    _closePosition(user, pos, price);
                 }
             }
         }
+
         emit AllPositionsClosed(msg.sender, block.timestamp);
     }
 
-    // ===============================================================
-    // Helpers
-    // ===============================================================
+    // ------------------------------------------------------------------
+    // HELPERS
+    // ------------------------------------------------------------------
 
     function calculateLiquidationPrice(
         uint256 entryPrice,
@@ -1491,12 +1447,7 @@ contract PerpDEX {
         uint256 margin,
         bool isLong
     ) internal pure returns (uint256) {
-        // With MAINTENANCE_MARGIN_RATIO = 0, this becomes bankruptcy price:
-        // priceChange = entryPrice * margin / size = entryPrice / leverage
-        uint256 maint = (margin * MAINTENANCE_MARGIN_RATIO) / ONE; // = 0 now
-        uint256 effective = margin - maint;
-        uint256 priceChange = (entryPrice * effective) / size;
-
+        uint256 priceChange = (entryPrice * margin) / size;
         return isLong ? entryPrice - priceChange : entryPrice + priceChange;
     }
 
@@ -1506,14 +1457,12 @@ contract PerpDEX {
         bool isEntry
     ) internal pure returns (uint256) {
         uint256 spread = (price * SPREAD_BPS) / 10000;
-        if (isEntry) {
-            return isLong ? price + spread : price - spread;
-        }
+        if (isEntry) return isLong ? price + spread : price - spread;
         return isLong ? price - spread : price + spread;
     }
 
     function toUint(int64 x) internal pure returns (uint256) {
-        require(x >= 0, "Negative price");
+        require(x >= 0);
         return uint256(int256(x));
     }
 }

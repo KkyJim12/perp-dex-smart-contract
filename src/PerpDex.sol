@@ -18,7 +18,7 @@ contract PerpDEX {
 
     uint256 public constant ONE = 1e18;
 
-    uint256 public constant FEE_RATIO = 0;
+    uint256 public constant WINNING_FEE_BPS = 50; // 0.5% fee on winning positions only
     uint256 public constant SPREAD_BPS = 0;
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 0;
     uint256 public constant LIQUIDATION_REWARD_RATIO = 0;
@@ -75,6 +75,16 @@ contract PerpDEX {
 
     uint256 public totalOpenMargin;
 
+    // Secondary Vault (Fee Vault) - serves as backup for main vault
+    uint256 public totalSecondaryShares;
+    mapping(address => uint256) public secondaryShares;
+    uint256 public secondaryVaultBalance; // Accumulated fees
+
+    // Main Vault PnL Tracking
+    int256 public vaultTotalPnL; // Cumulative vault profit/loss
+    uint256 public vaultTotalProfit; // Total profit earned by vault
+    uint256 public vaultTotalLoss; // Total loss taken by vault
+
     event OpenPosition(
         bytes32 indexed id,
         address indexed user,
@@ -123,6 +133,22 @@ contract PerpDEX {
         uint256 newTakeProfit,
         uint256 newStopLoss
     );
+    event FeeCollected(
+        bytes32 indexed positionId,
+        address indexed user,
+        uint256 feeAmount
+    );
+    event SecondaryVaultDeposit(
+        address indexed user,
+        uint256 amount,
+        uint256 shares
+    );
+    event SecondaryVaultWithdraw(
+        address indexed user,
+        uint256 amount,
+        uint256 shares
+    );
+    event VaultBackupUsed(uint256 amount, uint256 timestamp);
 
     constructor(address _usdt, address _pyth) {
         require(_usdt != address(0) && _pyth != address(0), "Invalid address");
@@ -190,7 +216,9 @@ contract PerpDEX {
 
     function getPoolValue() public view returns (uint256) {
         uint256 bal = usdt.balanceOf(address(this));
-        return bal > totalOpenMargin ? bal - totalOpenMargin : 0;
+        // Subtract both open margin and secondary vault balance from main pool
+        uint256 reserved = totalOpenMargin + secondaryVaultBalance;
+        return bal > reserved ? bal - reserved : 0;
     }
 
     function getSharePrice() external view returns (uint256) {
@@ -235,6 +263,112 @@ contract PerpDEX {
 
         require(usdt.transfer(msg.sender, amount), "transfer failed");
         emit LPWithdraw(msg.sender, amount, shares);
+    }
+
+    // ------------------------------------------------------------------
+    // VAULT PnL TRACKING
+    // ------------------------------------------------------------------
+
+    function getVaultPnL() external view returns (int256) {
+        return vaultTotalPnL;
+    }
+
+    function getVaultStats()
+        external
+        view
+        returns (
+            int256 totalPnL,
+            uint256 totalProfit,
+            uint256 totalLoss,
+            uint256 netProfit
+        )
+    {
+        totalPnL = vaultTotalPnL;
+        totalProfit = vaultTotalProfit;
+        totalLoss = vaultTotalLoss;
+        netProfit = vaultTotalProfit > vaultTotalLoss
+            ? vaultTotalProfit - vaultTotalLoss
+            : 0;
+    }
+
+    // ------------------------------------------------------------------
+    // SECONDARY VAULT (FEE VAULT) - Backup for Main Vault
+    // ------------------------------------------------------------------
+
+    function getSecondaryVaultValue() public view returns (uint256) {
+        return secondaryVaultBalance;
+    }
+
+    function getSecondarySharePrice() external view returns (uint256) {
+        if (totalSecondaryShares == 0) return ONE;
+        return (secondaryVaultBalance * ONE) / totalSecondaryShares;
+    }
+
+    function depositSecondaryVault(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be > 0");
+        uint256 vaultBefore = secondaryVaultBalance;
+
+        uint256 shares = (totalSecondaryShares == 0 || vaultBefore == 0)
+            ? amount
+            : (amount * totalSecondaryShares) / vaultBefore;
+
+        require(shares > 0, "Shares must be > 0");
+
+        require(
+            usdt.transferFrom(msg.sender, address(this), amount),
+            "Transfer failed"
+        );
+
+        secondaryShares[msg.sender] += shares;
+        totalSecondaryShares += shares;
+        secondaryVaultBalance += amount;
+
+        emit SecondaryVaultDeposit(msg.sender, amount, shares);
+    }
+
+    function withdrawSecondaryVault(uint256 shares) external onlyOwner {
+        require(shares > 0, "Shares must be > 0");
+        uint256 userShares = secondaryShares[msg.sender];
+        require(userShares >= shares, "Insufficient shares");
+
+        uint256 vault = secondaryVaultBalance;
+        require(vault > 0, "Vault empty");
+
+        uint256 amount = (shares * vault) / totalSecondaryShares;
+        require(amount > 0, "Amount must be > 0");
+
+        secondaryShares[msg.sender] = userShares - shares;
+        totalSecondaryShares -= shares;
+        secondaryVaultBalance -= amount;
+
+        require(usdt.transfer(msg.sender, amount), "Transfer failed");
+        emit SecondaryVaultWithdraw(msg.sender, amount, shares);
+    }
+
+    // Use secondary vault to backup main vault in emergency
+    function useSecondaryVaultBackup(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be > 0");
+        require(
+            secondaryVaultBalance >= amount,
+            "Insufficient secondary vault"
+        );
+
+        secondaryVaultBalance -= amount;
+        // Amount stays in contract, now available for main vault
+
+        emit VaultBackupUsed(amount, block.timestamp);
+    }
+
+    // Collect fees to secondary vault (internal function)
+    function _collectFeeToSecondaryVault(
+        uint256 feeAmount,
+        bytes32 positionId,
+        address user
+    ) internal {
+        if (feeAmount > 0) {
+            secondaryVaultBalance += feeAmount;
+            emit FeeCollected(positionId, user, feeAmount);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -327,8 +461,8 @@ contract PerpDEX {
 
         require(usdt.transferFrom(msg.sender, address(this), margin));
 
-        uint256 fees = (margin * leverage * FEE_RATIO) / ONE;
-        uint256 netMargin = margin - fees;
+        // No opening fee - use full margin
+        uint256 netMargin = margin;
         uint256 netSize = netMargin * leverage;
 
         totalOpenMargin += netMargin;
@@ -340,7 +474,7 @@ contract PerpDEX {
             leverage,
             netSize,
             info.pythTokenId,
-            fees,
+            0, // No opening fees
             oraclePrice,
             takeProfit,
             stopLoss
@@ -434,7 +568,7 @@ contract PerpDEX {
             if (pos.id == positionId && !pos.isClosed) {
                 pos.takeProfit = newTP;
                 pos.stopLoss = newSL;
-                
+
                 emit TPSLModified(positionId, msg.sender, newTP, newSL);
                 return;
             }
@@ -621,8 +755,33 @@ contract PerpDEX {
         int256 rawPayout = int256(pos.margin) + cappedPnl - fundingPayment;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        uint256 closeFee = (payout * FEE_RATIO) / ONE;
-        payout = payout > closeFee ? payout - closeFee : 0;
+        // Calculate vault PnL (opposite of user PnL)
+        // User profit = Vault loss, User loss = Vault profit
+        int256 userPnL = int256(payout) - int256(pos.margin);
+        int256 vaultPnL = -userPnL; // Vault PnL is opposite of user PnL
+
+        // Track vault PnL
+        vaultTotalPnL += vaultPnL;
+        if (vaultPnL > 0) {
+            // Vault gained (user lost)
+            vaultTotalProfit += uint256(vaultPnL);
+        } else if (vaultPnL < 0) {
+            // Vault lost (user won)
+            vaultTotalLoss += uint256(-vaultPnL);
+        }
+
+        // Apply 50 bps fee ONLY on winning positions (when payout > margin)
+        uint256 closeFee = 0;
+        if (payout > pos.margin) {
+            // Position is profitable - calculate fee on profit only
+            uint256 profit = payout - pos.margin;
+            closeFee = (profit * WINNING_FEE_BPS) / 10000;
+            payout = payout - closeFee;
+
+            // Collect fee to secondary vault
+            _collectFeeToSecondaryVault(closeFee, pos.id, user);
+        }
+        // If payout <= margin, it's a loss - no fee applied
 
         if (pos.isLong) {
             pf.oiLong = pf.oiLong >= pos.size ? pf.oiLong - pos.size : 0;

@@ -5,9 +5,17 @@ import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 
+interface IppUSDC {
+    function mint(address to, uint256 amount) external;
+    function burn(address from, uint256 amount) external;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+}
+
 contract PerpDEX {
     IPyth public immutable pyth;
-    ERC20 public immutable usdt;
+    ERC20 public immutable usdc;
+    IppUSDC public ppUSDC; // LP token
 
     address public owner;
 
@@ -18,7 +26,7 @@ contract PerpDEX {
 
     uint256 public constant ONE = 1e18;
 
-    uint256 public constant WINNING_FEE_BPS = 50; // 0.5% fee on winning positions only
+    uint256 public constant WINNING_FEE_BPS = 200; // 2% fee on winning positions only
     uint256 public constant SPREAD_BPS = 0;
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 0;
     uint256 public constant LIQUIDATION_REWARD_RATIO = 0;
@@ -70,10 +78,11 @@ contract PerpDEX {
     PairInfo[] public allPairs;
     address[] public allUsers;
 
-    uint256 public totalLpShares;
-    mapping(address => uint256) public lpShares;
-
     uint256 public totalOpenMargin;
+
+    // LP deposit tracking for time lock
+    mapping(address => uint256) public lastDepositTime;
+    uint256 public constant WITHDRAW_DELAY = 1 hours; // Minimum time before withdrawal
 
     // Secondary Vault (Fee Vault) - serves as backup for main vault
     uint256 public totalSecondaryShares;
@@ -150,10 +159,14 @@ contract PerpDEX {
     );
     event VaultBackupUsed(uint256 amount, uint256 timestamp);
 
-    constructor(address _usdt, address _pyth) {
-        require(_usdt != address(0) && _pyth != address(0), "Invalid address");
-        usdt = ERC20(_usdt);
+    constructor(address _usdc, address _pyth, address _ppUSDC) {
+        require(
+            _usdc != address(0) && _pyth != address(0) && _ppUSDC != address(0),
+            "Invalid address"
+        );
+        usdc = ERC20(_usdc);
         pyth = IPyth(_pyth);
+        ppUSDC = IppUSDC(_ppUSDC);
         owner = msg.sender;
         emit OwnershipTransferred(address(0), msg.sender);
         _addInitialPairs();
@@ -215,60 +228,79 @@ contract PerpDEX {
     // ------------------------------------------------------------------
 
     function getPoolValue() public view returns (uint256) {
-        uint256 bal = usdt.balanceOf(address(this));
+        uint256 bal = usdc.balanceOf(address(this));
         // Subtract both open margin and secondary vault balance from main pool
         uint256 reserved = totalOpenMargin + secondaryVaultBalance;
         return bal > reserved ? bal - reserved : 0;
     }
 
-    function getSharePrice() external view returns (uint256) {
-        if (totalLpShares == 0) return ONE;
+    function getppUSDCPrice() external view returns (uint256) {
+        uint256 totalSupply = ppUSDC.totalSupply();
+        if (totalSupply == 0) return ONE;
         uint256 pool = getPoolValue();
-        return (pool * ONE) / totalLpShares;
+        return (pool * ONE) / totalSupply;
     }
 
     function depositLP(uint256 amount) external {
-        require(amount > 0);
+        require(amount > 0, "Amount must be > 0");
         uint256 poolBefore = getPoolValue();
+        uint256 totalSupply = ppUSDC.totalSupply();
 
-        uint256 shares = (totalLpShares == 0 || poolBefore == 0)
+        // Calculate ppUSDC to mint
+        uint256 ppUSDCToMint = (totalSupply == 0 || poolBefore == 0)
             ? amount
-            : (amount * totalLpShares) / poolBefore;
+            : (amount * totalSupply) / poolBefore;
 
-        require(shares > 0);
+        require(ppUSDCToMint > 0, "Shares must be > 0");
 
+        // Transfer USDC from user
         require(
-            usdt.transferFrom(msg.sender, address(this), amount),
-            "transfer failed"
+            usdc.transferFrom(msg.sender, address(this), amount),
+            "Transfer failed"
         );
-        lpShares[msg.sender] += shares;
-        totalLpShares += shares;
 
-        emit LPDeposit(msg.sender, amount, shares);
+        // Mint ppUSDC to user
+        ppUSDC.mint(msg.sender, ppUSDCToMint);
+
+        // Record deposit time for withdraw delay
+        lastDepositTime[msg.sender] = block.timestamp;
+
+        emit LPDeposit(msg.sender, amount, ppUSDCToMint);
     }
 
-    function withdrawLP(uint256 shares) external {
-        require(shares > 0);
-        uint256 userShares = lpShares[msg.sender];
-        require(userShares >= shares);
+    function withdrawLP(uint256 ppUSDCAmount) external {
+        require(ppUSDCAmount > 0, "Amount must be > 0");
+        
+        // Enforce withdraw delay to prevent exploit
+        require(
+            block.timestamp >= lastDepositTime[msg.sender] + WITHDRAW_DELAY,
+            "Withdraw delay not met"
+        );
+        
+        uint256 userBalance = ppUSDC.balanceOf(msg.sender);
+        require(userBalance >= ppUSDCAmount, "Insufficient ppUSDC");
 
         uint256 pool = getPoolValue();
-        require(pool > 0);
+        require(pool > 0, "Pool empty");
 
-        uint256 amount = (shares * pool) / totalLpShares;
-        require(amount > 0);
+        uint256 totalSupply = ppUSDC.totalSupply();
+        
+        // Calculate USDC to return based on ppUSDC amount
+        uint256 usdcAmount = (ppUSDCAmount * pool) / totalSupply;
+        require(usdcAmount > 0, "Amount must be > 0");
 
-        lpShares[msg.sender] = userShares - shares;
-        totalLpShares -= shares;
+        // Burn ppUSDC from user
+        ppUSDC.burn(msg.sender, ppUSDCAmount);
 
-        require(usdt.transfer(msg.sender, amount), "transfer failed");
-        emit LPWithdraw(msg.sender, amount, shares);
+        // Transfer USDC to user
+        require(usdc.transfer(msg.sender, usdcAmount), "Transfer failed");
+
+        emit LPWithdraw(msg.sender, usdcAmount, ppUSDCAmount);
     }
 
     // ------------------------------------------------------------------
     // VAULT PnL TRACKING
     // ------------------------------------------------------------------
-
     function getVaultPnL() external view returns (int256) {
         return vaultTotalPnL;
     }
@@ -315,7 +347,7 @@ contract PerpDEX {
         require(shares > 0, "Shares must be > 0");
 
         require(
-            usdt.transferFrom(msg.sender, address(this), amount),
+            usdc.transferFrom(msg.sender, address(this), amount),
             "Transfer failed"
         );
 
@@ -341,7 +373,7 @@ contract PerpDEX {
         totalSecondaryShares -= shares;
         secondaryVaultBalance -= amount;
 
-        require(usdt.transfer(msg.sender, amount), "Transfer failed");
+        require(usdc.transfer(msg.sender, amount), "Transfer failed");
         emit SecondaryVaultWithdraw(msg.sender, amount, shares);
     }
 
@@ -459,7 +491,7 @@ contract PerpDEX {
         );
         uint256 oraclePrice = toUint(token.price);
 
-        require(usdt.transferFrom(msg.sender, address(this), margin));
+        require(usdc.transferFrom(msg.sender, address(this), margin));
 
         // No opening fee - use full margin
         uint256 netMargin = margin;
@@ -623,37 +655,43 @@ contract PerpDEX {
                     priceUpdateData,
                     pos.pythTokenId
                 );
-                uint256 price = toUint(token.price);
+                uint256 currentPrice = toUint(token.price);
 
                 bool hitTP = false;
                 bool hitSL = false;
                 string memory status = "";
+                uint256 closePrice = currentPrice; // Default to current price
 
                 if (pos.takeProfit > 0) {
-                    if (pos.isLong && price >= pos.takeProfit) {
+                    if (pos.isLong && currentPrice >= pos.takeProfit) {
                         hitTP = true;
                         status = "tp";
+                        closePrice = pos.takeProfit; // Use exact TP price
                     }
-                    if (!pos.isLong && price <= pos.takeProfit) {
+                    if (!pos.isLong && currentPrice <= pos.takeProfit) {
                         hitTP = true;
                         status = "tp";
+                        closePrice = pos.takeProfit; // Use exact TP price
                     }
                 }
 
                 if (pos.stopLoss > 0) {
-                    if (pos.isLong && price <= pos.stopLoss) {
+                    if (pos.isLong && currentPrice <= pos.stopLoss) {
                         hitSL = true;
                         status = "sl";
+                        closePrice = pos.stopLoss; // Use exact SL price
                     }
-                    if (!pos.isLong && price >= pos.stopLoss) {
+                    if (!pos.isLong && currentPrice >= pos.stopLoss) {
                         hitSL = true;
                         status = "sl";
+                        closePrice = pos.stopLoss; // Use exact SL price
                     }
                 }
 
                 require(hitTP || hitSL, "No TP/SL triggered");
 
-                _closePosition(user, pos, price, status);
+                // Close at exact TP/SL price, not current market price
+                _closePosition(user, pos, closePrice, status);
                 return;
             }
         }
@@ -696,6 +734,7 @@ contract PerpDEX {
 
                 int256 equity = int256(pos.margin) + pnl - fundingPayment;
 
+                // Liquidation: max loss is 100% of margin (equity <= 0)
                 require(equity <= 0, "Not liquidatable");
 
                 if (pos.isLong) {
@@ -712,9 +751,14 @@ contract PerpDEX {
                     totalOpenMargin -= pos.margin;
                 else totalOpenMargin = 0;
 
+                // Track vault PnL - vault gains the full margin on liquidation
+                int256 vaultPnL = int256(pos.margin); // Vault gains 100% of margin
+                vaultTotalPnL += vaultPnL;
+                vaultTotalProfit += pos.margin;
+
                 pos.isClosed = true;
                 pos.closePrice = price;
-                pos.payout = 0;
+                pos.payout = 0; // User gets nothing on liquidation
 
                 emit ClosePosition(pos.id, user, price, 0, 0, "liquidate");
                 return;
@@ -760,7 +804,7 @@ contract PerpDEX {
         int256 userPnL = int256(payout) - int256(pos.margin);
         int256 vaultPnL = -userPnL; // Vault PnL is opposite of user PnL
 
-        // Track vault PnL
+        // Track realized vault PnL
         vaultTotalPnL += vaultPnL;
         if (vaultPnL > 0) {
             // Vault gained (user lost)
@@ -770,7 +814,7 @@ contract PerpDEX {
             vaultTotalLoss += uint256(-vaultPnL);
         }
 
-        // Apply 50 bps fee ONLY on winning positions (when payout > margin)
+        // Apply 2% fee ONLY on winning positions (when payout > margin)
         uint256 closeFee = 0;
         if (payout > pos.margin) {
             // Position is profitable - calculate fee on profit only
@@ -792,7 +836,7 @@ contract PerpDEX {
         if (totalOpenMargin >= pos.margin) totalOpenMargin -= pos.margin;
         else totalOpenMargin = 0;
 
-        if (payout > 0) require(usdt.transfer(user, payout));
+        if (payout > 0) require(usdc.transfer(user, payout));
 
         pos.isClosed = true;
         pos.closePrice = price;

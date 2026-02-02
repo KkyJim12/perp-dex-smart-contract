@@ -60,13 +60,18 @@ fi
 echo ""
 echo "=== Deployment Complete ==="
 echo ""
+echo "📋 CONTRACT IDENTIFICATION:"
+echo "   MockUSDC.sol  = Mock USDC Token Contract"
+echo "   ppUSDC.sol    = LP Token Contract (Pool Shares)"
+echo "   PerpDex.sol   = Main PerpDEX Trading Contract"
+echo ""
 echo "Please update the addresses below from the deployment output:"
 echo ""
 
 # Prompt for deployed addresses
-read -p "Enter MockUSDC address (or press Enter to skip): " MOCK_USDC_ADDRESS
-read -p "Enter ppUSDC address: " PPUSDC_ADDRESS
-read -p "Enter PerpDex address: " PERPDEX_ADDRESS
+read -p "Enter MockUSDC.sol address (or press Enter to skip): " MOCK_USDC_ADDRESS
+read -p "Enter ppUSDC.sol address: " PPUSDC_ADDRESS
+read -p "Enter PerpDex.sol address: " PERPDEX_ADDRESS
 
 if [ -z "$PPUSDC_ADDRESS" ] || [ -z "$PERPDEX_ADDRESS" ]; then
     echo "Error: ppUSDC and PerpDex addresses are required!"
@@ -93,7 +98,7 @@ echo ""
 
 # Verify MockUSDC if deployed
 if [ -n "$MOCK_USDC_ADDRESS" ]; then
-    echo "Verifying MockUSDC at $MOCK_USDC_ADDRESS..."
+    echo "Verifying MockUSDC.sol at $MOCK_USDC_ADDRESS..."
     forge verify-contract \
         --rpc-url $RPC_URL \
         --verifier $VERIFIER \
@@ -103,15 +108,15 @@ if [ -n "$MOCK_USDC_ADDRESS" ]; then
         src/MockUSDC.sol:MockUSDC
     
     if [ $? -eq 0 ]; then
-        echo "✅ MockUSDC verified successfully!"
+        echo "✅ MockUSDC.sol verified successfully!"
     else
-        echo "⚠️  MockUSDC verification failed (may already be verified)"
+        echo "⚠️  MockUSDC.sol verification failed (may already be verified)"
     fi
     echo ""
 fi
 
 # Verify ppUSDC
-echo "Verifying ppUSDC at $PPUSDC_ADDRESS..."
+echo "Verifying ppUSDC.sol at $PPUSDC_ADDRESS..."
 forge verify-contract \
     --rpc-url $RPC_URL \
     --verifier $VERIFIER \
@@ -121,14 +126,14 @@ forge verify-contract \
     src/ppUSDC.sol:ppUSDC
 
 if [ $? -eq 0 ]; then
-    echo "✅ ppUSDC verified successfully!"
+    echo "✅ ppUSDC.sol verified successfully!"
 else
-    echo "⚠️  ppUSDC verification failed (may already be verified)"
+    echo "⚠️  ppUSDC.sol verification failed (may already be verified)"
 fi
 echo ""
 
 # Verify PerpDex
-echo "Verifying PerpDex at $PERPDEX_ADDRESS..."
+echo "Verifying PerpDex.sol at $PERPDEX_ADDRESS..."
 CONSTRUCTOR_ARGS=$(cast abi-encode "constructor(address,address,address)" $USDC_ADDRESS $PYTH_ADDRESS $PPUSDC_ADDRESS)
 
 forge verify-contract \
@@ -141,23 +146,31 @@ forge verify-contract \
     src/PerpDex.sol:PerpDEX
 
 if [ $? -eq 0 ]; then
-    echo "✅ PerpDex verified successfully!"
+    echo "✅ PerpDex.sol verified successfully!"
 else
-    echo "⚠️  PerpDex verification failed (may already be verified)"
+    echo "⚠️  PerpDex.sol verification failed (may already be verified)"
 fi
 echo ""
 
 echo "==================================="
-echo "   Deployment Summary"
+echo "   📋 DEPLOYMENT SUMMARY"
 echo "==================================="
 echo ""
+echo "🔗 CONTRACT ADDRESSES:"
 if [ -n "$MOCK_USDC_ADDRESS" ]; then
-    echo "MockUSDC:  $MOCK_USDC_ADDRESS"
+    echo "   MockUSDC.sol:  $MOCK_USDC_ADDRESS"
 fi
-echo "ppUSDC:    $PPUSDC_ADDRESS"
-echo "PerpDex:   $PERPDEX_ADDRESS"
+echo "   ppUSDC.sol:    $PPUSDC_ADDRESS"
+echo "   PerpDex.sol:   $PERPDEX_ADDRESS"
 echo ""
-echo "Explorer:  https://explorer.monad.xyz"
+echo "📝 CONTRACT DESCRIPTIONS:"
+if [ -n "$MOCK_USDC_ADDRESS" ]; then
+    echo "   MockUSDC.sol  = Mock USDC Token (for testing)"
+fi
+echo "   ppUSDC.sol    = LP Token Contract (Pool Shares)"
+echo "   PerpDex.sol   = Main PerpDEX Trading Contract"
+echo ""
+echo "🌐 Explorer:     https://explorer.monad.xyz"
 echo ""
 echo "==================================="
 echo "   Deployment Complete! 🚀"

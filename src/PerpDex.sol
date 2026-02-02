@@ -31,9 +31,8 @@ contract PerpDEX {
     uint256 public constant MAINTENANCE_MARGIN_RATIO = 0;
     uint256 public constant LIQUIDATION_REWARD_RATIO = 0;
 
-    uint256 public constant MAX_DAILY_FUNDING_BPS = 100;
-    uint256 public constant FUNDING_MAX_PER_SEC =
-        ((ONE * MAX_DAILY_FUNDING_BPS) / 10000) / 86400;
+    uint256 public constant MAX_DAILY_FUNDING_BPS = 0; // Disabled funding
+    uint256 public constant FUNDING_MAX_PER_SEC = 0; // Disabled funding
 
     uint256 public constant MAX_PNL_RATIO = 5e18; // 500%
 
@@ -132,6 +131,15 @@ contract PerpDEX {
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
     event LPDeposit(address indexed user, uint256 amount, uint256 shares);
     event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
+    event StakingDebug(
+        address indexed user,
+        string action,
+        uint256 amount,
+        uint256 shares,
+        uint256 totalSupply,
+        uint256 tvl,
+        uint256 userPercentage
+    );
     event TPSLModified(
         bytes32 indexed positionId,
         address indexed user,
@@ -188,7 +196,7 @@ contract PerpDEX {
     receive() external payable {}
 
     function _addInitialPairs() internal {
-        // Major Cryptocurrencies
+        // Major Cryptocurrencies - Exactly 13 pairs as per user's database migration
         addPairInternal(
             "BTC_USD",
             0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
@@ -214,10 +222,6 @@ contract PerpDEX {
             0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8
         );
         addPairInternal(
-            "ZRO_USD",
-            0x5b1703d7eb9dc8662a61556a2ca2f9861747c3fc803e01ba5a8ce35cb50a13a1
-        );
-        addPairInternal(
             "OP_USD",
             0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf
         );
@@ -228,10 +232,6 @@ contract PerpDEX {
         addPairInternal(
             "DOGE_USD",
             0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c
-        );
-        addPairInternal(
-            "BONK_USD",
-            0x72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419
         );
     }
 
@@ -274,41 +274,190 @@ contract PerpDEX {
     // ------------------------------------------------------------------
 
     function getPoolValue() public view returns (uint256) {
-        uint256 bal = usdc.balanceOf(address(this));
-        // Subtract both open margin and secondary vault balance from main pool
+        uint256 contractBalance = usdc.balanceOf(address(this));
+        
+        // Subtract reserved amounts (trader margins + secondary vault)
         uint256 reserved = totalOpenMargin + secondaryVaultBalance;
-        return bal > reserved ? bal - reserved : 0;
+        
+        if (contractBalance <= reserved) {
+            return 0; // Pool is empty or negative
+        }
+        
+        // For now, use simple calculation without PnL tracking
+        // This represents the actual USDC available to LPs
+        return contractBalance - reserved;
+    }
+
+    // Alternative function that includes PnL (for future use)
+    function getPoolValueWithPnL() public view returns (uint256) {
+        uint256 basePoolValue = getPoolValue();
+        
+        // Add/subtract unrealized PnL from vault perspective
+        if (vaultTotalPnL >= 0) {
+            return basePoolValue + uint256(vaultTotalPnL);
+        } else {
+            uint256 loss = uint256(-vaultTotalPnL);
+            return basePoolValue > loss ? basePoolValue - loss : 0;
+        }
     }
 
     function getppUSDCPrice() external view returns (uint256) {
         uint256 totalSupply = ppUSDC.totalSupply();
-        if (totalSupply == 0) return ONE;
-        uint256 pool = getPoolValue();
-        return (pool * ONE) / totalSupply;
+        if (totalSupply == 0) return ONE; // 1:1 ratio for first deposit
+        
+        uint256 poolValue = getPoolValue();
+        if (poolValue == 0) return 0; // Pool is empty
+        
+        return (poolValue * ONE) / totalSupply;
+    }
+
+    // Helper function to calculate how much ppUSDC user would get for a deposit
+    function calculateDepositShares(uint256 depositAmount) external view returns (uint256) {
+        require(depositAmount > 0, "Amount must be > 0");
+        
+        uint256 totalSupply = ppUSDC.totalSupply();
+        uint256 currentTVL = getPoolValue();
+        
+        if (totalSupply == 0) {
+            return depositAmount; // 1:1 for first deposit
+        } else {
+            require(currentTVL > 0, "Pool has no value");
+            return (depositAmount * totalSupply) / currentTVL;
+        }
+    }
+
+    // Helper function to calculate how much USDC user would get for burning ppUSDC
+    function calculateWithdrawAmount(uint256 ppUSDCAmount) external view returns (uint256) {
+        require(ppUSDCAmount > 0, "Amount must be > 0");
+        
+        uint256 totalSupply = ppUSDC.totalSupply();
+        require(totalSupply > 0, "No ppUSDC in circulation");
+        
+        uint256 currentTVL = getPoolValue();
+        require(currentTVL > 0, "Pool has no value");
+        
+        return (ppUSDCAmount * currentTVL) / totalSupply;
+    }
+
+    // Helper function to debug withdrawal calculations with detailed breakdown
+    function debugWithdrawDetailed(uint256 ppUSDCAmount) external view returns (
+        uint256 userBalance,
+        uint256 totalSupply,
+        uint256 currentTVL,
+        uint256 contractBalance,
+        uint256 totalOpenMargin,
+        uint256 secondaryVaultBalance,
+        uint256 reserved,
+        uint256 calculatedUSDC,
+        uint256 userPercentage,
+        uint256 expectedRatio, // What the ratio should be (1e18 = 1:1)
+        uint256 actualRatio    // What the actual ratio is
+    ) {
+        userBalance = ppUSDC.balanceOf(msg.sender);
+        totalSupply = ppUSDC.totalSupply();
+        currentTVL = getPoolValue();
+        contractBalance = usdc.balanceOf(address(this));
+        totalOpenMargin = totalOpenMargin;
+        secondaryVaultBalance = secondaryVaultBalance;
+        reserved = totalOpenMargin + secondaryVaultBalance;
+        calculatedUSDC = totalSupply > 0 ? (ppUSDCAmount * currentTVL) / totalSupply : 0;
+        userPercentage = totalSupply > 0 ? (ppUSDCAmount * 10000) / totalSupply : 0;
+        
+        // Calculate expected vs actual ratios
+        expectedRatio = ONE; // 1:1 ratio expected
+        actualRatio = totalSupply > 0 ? (currentTVL * ONE) / totalSupply : ONE;
+    }
+
+    // Helper function to get user's percentage ownership of the pool
+    function getUserPoolPercentage(address user) external view returns (uint256) {
+        uint256 userBalance = ppUSDC.balanceOf(user);
+        uint256 totalSupply = ppUSDC.totalSupply();
+        
+        if (totalSupply == 0) return 0;
+        
+        // Return percentage with 4 decimal places (10000 = 100%)
+        return (userBalance * 10000) / totalSupply;
+    }
+
+    // Function to check pool health and identify potential issues
+    function checkPoolHealth() external view returns (
+        bool isHealthy,
+        string memory issue,
+        uint256 contractBalance,
+        uint256 totalSupply,
+        uint256 currentTVL,
+        uint256 ppUSDCPrice,
+        uint256 totalReserved
+    ) {
+        contractBalance = usdc.balanceOf(address(this));
+        totalSupply = ppUSDC.totalSupply();
+        currentTVL = getPoolValue();
+        totalReserved = totalOpenMargin + secondaryVaultBalance;
+        
+        isHealthy = true;
+        issue = "Pool is healthy";
+        
+        // Calculate ppUSDC price
+        ppUSDCPrice = totalSupply > 0 ? (currentTVL * ONE) / totalSupply : ONE;
+        
+        // Check for issues
+        if (contractBalance < totalReserved) {
+            isHealthy = false;
+            issue = "Contract balance less than reserved amounts";
+        } else if (currentTVL == 0 && totalSupply > 0) {
+            isHealthy = false;
+            issue = "Pool has no value but ppUSDC tokens exist";
+        } else if (ppUSDCPrice > ONE * 2) {
+            isHealthy = false;
+            issue = "ppUSDC price too high - possible calculation error";
+        } else if (ppUSDCPrice < ONE / 2 && totalSupply > 0) {
+            isHealthy = false;
+            issue = "ppUSDC price too low - possible pool drain";
+        }
     }
 
     function depositLP(uint256 amount) external {
         require(amount > 0, "Amount must be > 0");
-        uint256 poolBefore = getPoolValue();
+        
         uint256 totalSupply = ppUSDC.totalSupply();
-
-        // Calculate ppUSDC to mint
-        uint256 ppUSDCToMint = (totalSupply == 0 || poolBefore == 0)
-            ? amount
-            : (amount * totalSupply) / poolBefore;
+        uint256 currentTVL = getPoolValue();
+        
+        uint256 ppUSDCToMint;
+        
+        if (totalSupply == 0) {
+            // First deposit: 1:1 ratio (1 USDC = 1 ppUSDC)
+            ppUSDCToMint = amount;
+        } else {
+            // Subsequent deposits: ppUSDC_to_mint = (deposit_amount * total_ppUSDC_supply) / current_TVL
+            require(currentTVL > 0, "Pool has no value");
+            ppUSDCToMint = (amount * totalSupply) / currentTVL;
+        }
 
         require(ppUSDCToMint > 0, "Shares must be > 0");
 
-        // Transfer USDC from user
+        // Transfer USDC from user to contract
         require(
             usdc.transferFrom(msg.sender, address(this), amount),
             "Transfer failed"
         );
 
-        // Mint ppUSDC to user
+        // Mint ppUSDC tokens to user
         ppUSDC.mint(msg.sender, ppUSDCToMint);
 
+        // Calculate user's new percentage
+        uint256 newTotalSupply = ppUSDC.totalSupply();
+        uint256 userPercentage = (ppUSDCToMint * 10000) / newTotalSupply;
+
         emit LPDeposit(msg.sender, amount, ppUSDCToMint);
+        emit StakingDebug(
+            msg.sender,
+            "deposit",
+            amount,
+            ppUSDCToMint,
+            newTotalSupply,
+            currentTVL + amount,
+            userPercentage
+        );
     }
 
     function withdrawLP(uint256 ppUSDCAmount) external {
@@ -317,14 +466,31 @@ contract PerpDEX {
         uint256 userBalance = ppUSDC.balanceOf(msg.sender);
         require(userBalance >= ppUSDCAmount, "Insufficient ppUSDC");
 
-        uint256 pool = getPoolValue();
-        require(pool > 0, "Pool empty");
-
         uint256 totalSupply = ppUSDC.totalSupply();
+        require(totalSupply > 0, "No ppUSDC in circulation");
         
-        // Calculate USDC to return based on ppUSDC amount
-        uint256 usdcAmount = (ppUSDCAmount * pool) / totalSupply;
+        uint256 currentTVL = getPoolValue();
+        require(currentTVL > 0, "Pool has no value");
+        
+        // Calculate USDC to return: USDC_to_return = (ppUSDC_to_burn * current_TVL) / total_ppUSDC_supply
+        uint256 usdcAmount = (ppUSDCAmount * currentTVL) / totalSupply;
         require(usdcAmount > 0, "Amount must be > 0");
+        
+        // SAFETY CHECK: Ensure withdrawal amount is reasonable
+        // User should not get more USDC than their percentage of the pool
+        uint256 userPercentage = (ppUSDCAmount * 10000) / totalSupply; // Basis points (10000 = 100%)
+        uint256 maxExpectedUSDC = (currentTVL * userPercentage) / 10000;
+        
+        // Allow small rounding differences (0.1% tolerance)
+        uint256 tolerance = maxExpectedUSDC / 1000;
+        require(
+            usdcAmount <= maxExpectedUSDC + tolerance,
+            "Withdrawal amount exceeds expected share"
+        );
+        
+        // Additional safety check: ensure contract has enough USDC
+        uint256 contractBalance = usdc.balanceOf(address(this));
+        require(contractBalance >= usdcAmount, "Insufficient contract balance");
 
         // Burn ppUSDC from user
         ppUSDC.burn(msg.sender, ppUSDCAmount);
@@ -333,6 +499,15 @@ contract PerpDEX {
         require(usdc.transfer(msg.sender, usdcAmount), "Transfer failed");
 
         emit LPWithdraw(msg.sender, usdcAmount, ppUSDCAmount);
+        emit StakingDebug(
+            msg.sender,
+            "withdraw",
+            usdcAmount,
+            ppUSDCAmount,
+            totalSupply - ppUSDCAmount,
+            currentTVL - usdcAmount,
+            userPercentage
+        );
     }
 
     // ------------------------------------------------------------------
@@ -441,7 +616,7 @@ contract PerpDEX {
     }
 
     // ------------------------------------------------------------------
-    // FUNDING
+    // FUNDING (DISABLED - SET TO 0)
     // ------------------------------------------------------------------
 
     function updateFunding(string calldata pairs) public {
@@ -449,7 +624,7 @@ contract PerpDEX {
         PairFunding storage pf = pairFunding[pairs];
         emit FundingUpdated(
             pairs,
-            pf.growth,
+            pf.growth, // Always 0 since funding is disabled
             pf.oiLong,
             pf.oiShort,
             block.timestamp
@@ -458,34 +633,16 @@ contract PerpDEX {
 
     function _accrueFunding(string memory pairs) internal {
         PairFunding storage pf = pairFunding[pairs];
-        uint256 last = pf.lastUpdate;
-
-        if (last == 0) {
+        
+        // Update timestamp but don't calculate funding since it's disabled
+        if (pf.lastUpdate == 0) {
             pf.lastUpdate = block.timestamp;
-            return;
-        }
-
-        uint256 dt = block.timestamp - last;
-        if (dt == 0) return;
-
-        uint256 totalOI = pf.oiLong + pf.oiShort;
-        if (totalOI == 0) {
+        } else {
             pf.lastUpdate = block.timestamp;
-            return;
         }
-
-        uint256 diff = pf.oiLong > pf.oiShort
-            ? pf.oiLong - pf.oiShort
-            : pf.oiShort - pf.oiLong;
-        uint256 imbalanceRatio = (diff * ONE) / totalOI;
-
-        uint256 magPerSec = (FUNDING_MAX_PER_SEC * imbalanceRatio) / ONE;
-        int256 signedPerSec = pf.oiLong >= pf.oiShort
-            ? int256(magPerSec)
-            : -int256(magPerSec);
-
-        pf.growth += signedPerSec * int256(dt);
-        pf.lastUpdate = block.timestamp;
+        
+        // Funding growth remains 0 since FUNDING_MAX_PER_SEC = 0
+        // pf.growth stays unchanged (always 0 for new pairs)
     }
 
     // ------------------------------------------------------------------

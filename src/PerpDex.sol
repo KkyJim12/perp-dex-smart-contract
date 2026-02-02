@@ -80,10 +80,6 @@ contract PerpDEX {
 
     uint256 public totalOpenMargin;
 
-    // LP deposit tracking for time lock
-    mapping(address => uint256) public lastDepositTime;
-    uint256 public constant WITHDRAW_DELAY = 1 hours; // Minimum time before withdrawal
-
     // Secondary Vault (Fee Vault) - serves as backup for main vault
     uint256 public totalSecondaryShares;
     mapping(address => uint256) public secondaryShares;
@@ -167,6 +163,14 @@ contract PerpDEX {
         uint256 shares
     );
     event VaultBackupUsed(uint256 amount, uint256 timestamp);
+    event SLExecutedByLiquidationBot(
+        bytes32 indexed positionId,
+        address indexed user,
+        address indexed liquidator,
+        uint256 slPrice,
+        uint256 payout,
+        string reason
+    );
 
     constructor(address _usdc, address _pyth, address _ppUSDC) {
         require(
@@ -271,20 +275,11 @@ contract PerpDEX {
         // Mint ppUSDC to user
         ppUSDC.mint(msg.sender, ppUSDCToMint);
 
-        // Record deposit time for withdraw delay
-        lastDepositTime[msg.sender] = block.timestamp;
-
         emit LPDeposit(msg.sender, amount, ppUSDCToMint);
     }
 
     function withdrawLP(uint256 ppUSDCAmount) external {
         require(ppUSDCAmount > 0, "Amount must be > 0");
-        
-        // Enforce withdraw delay to prevent exploit
-        require(
-            block.timestamp >= lastDepositTime[msg.sender] + WITHDRAW_DELAY,
-            "Withdraw delay not met"
-        );
         
         uint256 userBalance = ppUSDC.balanceOf(msg.sender);
         require(userBalance >= ppUSDCAmount, "Insufficient ppUSDC");
@@ -765,11 +760,25 @@ contract PerpDEX {
                 );
                 uint256 currentPrice = toUint(token.price);
 
+                // SAFETY CHECK: Ensure position is not liquidatable before processing TP/SL
+                // Calculate current equity to prevent liquidation through TP/SL
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
+
+                PairFunding storage pf = pairFunding[pos.pairs];
+                int256 fundingPayment = (int256(pos.size) * (pf.growth - pos.fundingEntry)) / int256(ONE);
+                int256 equity = int256(pos.margin) + pnl - fundingPayment;
+
+                // If position is liquidatable (equity <= 0), reject TP/SL trigger
+                require(equity > 0, "Position is liquidatable, use liquidate() function");
+
                 bool hitTP = false;
                 bool hitSL = false;
                 string memory status = "";
                 uint256 closePrice = currentPrice; // Default to current price
 
+                // Check Take Profit conditions
                 if (pos.takeProfit > 0) {
                     if (pos.isLong && currentPrice >= pos.takeProfit) {
                         hitTP = true;
@@ -783,6 +792,7 @@ contract PerpDEX {
                     }
                 }
 
+                // Check Stop Loss conditions
                 if (pos.stopLoss > 0) {
                     if (pos.isLong && currentPrice <= pos.stopLoss) {
                         hitSL = true;
@@ -797,6 +807,14 @@ contract PerpDEX {
                 }
 
                 require(hitTP || hitSL, "No TP/SL triggered");
+
+                // ADDITIONAL SAFETY: Double-check equity at close price won't cause liquidation
+                int256 closePnl = pos.isLong
+                    ? (int256(pos.size) * (int256(closePrice) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(closePrice))) / int256(pos.entryPrice);
+                
+                int256 closeEquity = int256(pos.margin) + closePnl - fundingPayment;
+                require(closeEquity > 0, "TP/SL would result in liquidation, use liquidate() function");
 
                 // Close at exact TP/SL price, not current market price
                 _closePosition(user, pos, closePrice, status);
@@ -828,18 +846,52 @@ contract PerpDEX {
                 );
                 uint256 price = toUint(token.price);
 
+                // PROTECTION: Check if Stop Loss should be triggered instead of liquidation
+                if (pos.stopLoss > 0) {
+                    bool shouldTriggerSL = false;
+                    
+                    if (pos.isLong && price <= pos.stopLoss) {
+                        shouldTriggerSL = true;
+                    }
+                    if (!pos.isLong && price >= pos.stopLoss) {
+                        shouldTriggerSL = true;
+                    }
+                    
+                    // If SL should be triggered, execute SL instead of liquidation
+                    if (shouldTriggerSL) {
+                        // Calculate equity at SL price to ensure it's better than liquidation
+                        int256 slPnl = pos.isLong
+                            ? (int256(pos.size) * (int256(pos.stopLoss) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                            : (int256(pos.size) * (int256(pos.entryPrice) - int256(pos.stopLoss))) / int256(pos.entryPrice);
+                        
+                        PairFunding storage pf = pairFunding[pos.pairs];
+                        int256 fundingPayment = (int256(pos.size) * (pf.growth - pos.fundingEntry)) / int256(ONE);
+                        int256 slEquity = int256(pos.margin) + slPnl - fundingPayment;
+                        
+                        // If SL gives better outcome than liquidation (equity > 0), execute SL
+                        if (slEquity > 0) {
+                            emit SLExecutedByLiquidationBot(
+                                pos.id,
+                                user,
+                                msg.sender,
+                                pos.stopLoss,
+                                uint256(slEquity > int256(pos.margin) ? slEquity : int256(pos.margin)),
+                                "TP/SL bot out of gas, liquidation bot executed SL"
+                            );
+                            _closePosition(user, pos, pos.stopLoss, "sl");
+                            return;
+                        }
+                        // If SL would also result in liquidation, continue with normal liquidation
+                    }
+                }
+
+                // Normal liquidation logic
                 int256 pnl = pos.isLong
-                    ? (int256(pos.size) *
-                        (int256(price) - int256(pos.entryPrice))) /
-                        int256(pos.entryPrice)
-                    : (int256(pos.size) *
-                        (int256(pos.entryPrice) - int256(price))) /
-                        int256(pos.entryPrice);
+                    ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) / int256(pos.entryPrice);
 
                 PairFunding storage pf = pairFunding[pos.pairs];
-                int256 fundingPayment = (int256(pos.size) *
-                    (pf.growth - pos.fundingEntry)) / int256(ONE);
-
+                int256 fundingPayment = (int256(pos.size) * (pf.growth - pos.fundingEntry)) / int256(ONE);
                 int256 equity = int256(pos.margin) + pnl - fundingPayment;
 
                 // Liquidation: max loss is 100% of margin (equity <= 0)
@@ -1007,5 +1059,40 @@ contract PerpDEX {
     function toUint(int64 x) internal pure returns (uint256) {
         require(x >= 0);
         return uint256(int256(x));
+    }
+
+    // Helper function to check if a position is liquidatable
+    function isPositionLiquidatable(
+        Position storage pos,
+        uint256 currentPrice
+    ) internal view returns (bool, int256) {
+        int256 pnl = pos.isLong
+            ? (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+            : (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
+
+        PairFunding storage pf = pairFunding[pos.pairs];
+        int256 fundingPayment = (int256(pos.size) * (pf.growth - pos.fundingEntry)) / int256(ONE);
+        int256 equity = int256(pos.margin) + pnl - fundingPayment;
+
+        return (equity <= 0, equity);
+    }
+
+    // Public function to check position health (for frontend/bots)
+    function getPositionEquity(
+        address user,
+        bytes32 positionId,
+        uint256 currentPrice
+    ) external view returns (int256 equity, bool isLiquidatable) {
+        Position[] storage userPositions = positions[user];
+        
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+            if (pos.id == positionId && !pos.isClosed) {
+                (isLiquidatable, equity) = isPositionLiquidatable(pos, currentPrice);
+                return (equity, isLiquidatable);
+            }
+        }
+        
+        revert("Position not found");
     }
 }

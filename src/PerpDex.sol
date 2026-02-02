@@ -142,6 +142,15 @@ contract PerpDEX {
         uint256 newTakeProfit,
         uint256 newStopLoss
     );
+    event TPSLValidated(
+        bytes32 indexed positionId,
+        address indexed user,
+        uint256 currentPrice,
+        uint256 takeProfit,
+        uint256 stopLoss,
+        bool isLong,
+        string action
+    );
     event FeeCollected(
         bytes32 indexed positionId,
         address indexed user,
@@ -491,6 +500,49 @@ contract PerpDEX {
         );
         uint256 oraclePrice = toUint(token.price);
 
+        // Validate Take Profit and Stop Loss levels before opening position
+        if (takeProfit > 0) {
+            if (isLong) {
+                // Long position: TP must be ABOVE entry price (profit when price goes up)
+                require(takeProfit > oraclePrice, "Long TP must be above entry price");
+            } else {
+                // Short position: TP must be BELOW entry price (profit when price goes down)
+                require(takeProfit < oraclePrice, "Short TP must be below entry price");
+            }
+        }
+
+        if (stopLoss > 0) {
+            if (isLong) {
+                // Long position: SL must be BELOW entry price (loss when price goes down)
+                require(stopLoss < oraclePrice, "Long SL must be below entry price");
+            } else {
+                // Short position: SL must be ABOVE entry price (loss when price goes up)
+                require(stopLoss > oraclePrice, "Short SL must be above entry price");
+            }
+        }
+
+        // Additional validation: TP and SL cannot be the same
+        if (takeProfit > 0 && stopLoss > 0) {
+            require(takeProfit != stopLoss, "TP and SL cannot be the same price");
+        }
+
+        // Additional validation: Ensure reasonable distance from entry price (prevent dust orders)
+        uint256 minDistance = oraclePrice / 1000; // 0.1% minimum distance
+        if (takeProfit > 0) {
+            if (isLong) {
+                require(takeProfit >= oraclePrice + minDistance, "TP too close to entry price");
+            } else {
+                require(takeProfit <= oraclePrice - minDistance, "TP too close to entry price");
+            }
+        }
+        if (stopLoss > 0) {
+            if (isLong) {
+                require(stopLoss <= oraclePrice - minDistance, "SL too close to entry price");
+            } else {
+                require(stopLoss >= oraclePrice + minDistance, "SL too close to entry price");
+            }
+        }
+
         require(usdc.transferFrom(msg.sender, address(this), margin));
 
         // No opening fee - use full margin
@@ -581,6 +633,11 @@ contract PerpDEX {
             tp,
             sl
         );
+
+        // Emit validation event if TP/SL were set
+        if (tp > 0 || sl > 0) {
+            emit TPSLValidated(id, msg.sender, entryPrice, tp, sl, isLong, "open");
+        }
     }
 
     // ------------------------------------------------------------------
@@ -598,10 +655,61 @@ contract PerpDEX {
             Position storage pos = userPositions[i];
 
             if (pos.id == positionId && !pos.isClosed) {
+                // Get current price to validate TP/SL levels
+                PythStructs.Price memory priceData = pyth.getPriceUnsafe(pos.pythTokenId);
+                require(priceData.price > 0, "Invalid oracle price");
+                uint256 currentPrice = toUint(priceData.price);
+
+                // Validate Take Profit (TP) - must be in profit direction
+                if (newTP > 0) {
+                    if (pos.isLong) {
+                        // Long position: TP must be ABOVE current price (profit when price goes up)
+                        require(newTP > currentPrice, "Long TP must be above current price");
+                    } else {
+                        // Short position: TP must be BELOW current price (profit when price goes down)
+                        require(newTP < currentPrice, "Short TP must be below current price");
+                    }
+                }
+
+                // Validate Stop Loss (SL) - must be in loss direction
+                if (newSL > 0) {
+                    if (pos.isLong) {
+                        // Long position: SL must be BELOW current price (loss when price goes down)
+                        require(newSL < currentPrice, "Long SL must be below current price");
+                    } else {
+                        // Short position: SL must be ABOVE current price (loss when price goes up)
+                        require(newSL > currentPrice, "Short SL must be above current price");
+                    }
+                }
+
+                // Additional validation: TP and SL cannot be the same
+                if (newTP > 0 && newSL > 0) {
+                    require(newTP != newSL, "TP and SL cannot be the same price");
+                }
+
+                // Additional validation: Ensure reasonable distance from current price (prevent dust orders)
+                uint256 minDistance = currentPrice / 1000; // 0.1% minimum distance
+                if (newTP > 0) {
+                    if (pos.isLong) {
+                        require(newTP >= currentPrice + minDistance, "TP too close to current price");
+                    } else {
+                        require(newTP <= currentPrice - minDistance, "TP too close to current price");
+                    }
+                }
+                if (newSL > 0) {
+                    if (pos.isLong) {
+                        require(newSL <= currentPrice - minDistance, "SL too close to current price");
+                    } else {
+                        require(newSL >= currentPrice + minDistance, "SL too close to current price");
+                    }
+                }
+
+                // Update the TP/SL values
                 pos.takeProfit = newTP;
                 pos.stopLoss = newSL;
 
                 emit TPSLModified(positionId, msg.sender, newTP, newSL);
+                emit TPSLValidated(positionId, msg.sender, currentPrice, newTP, newSL, pos.isLong, "modify");
                 return;
             }
         }

@@ -188,6 +188,7 @@ contract PerpDEX {
     receive() external payable {}
 
     function _addInitialPairs() internal {
+        // Major Cryptocurrencies
         addPairInternal(
             "BTC_USD",
             0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
@@ -199,6 +200,38 @@ contract PerpDEX {
         addPairInternal(
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
+        );
+        addPairInternal(
+            "BNB_USD",
+            0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f
+        );
+        addPairInternal(
+            "SUI_USD",
+            0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744
+        );
+        addPairInternal(
+            "XRP_USD",
+            0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8
+        );
+        addPairInternal(
+            "ZRO_USD",
+            0x5b1703d7eb9dc8662a61556a2ca2f9861747c3fc803e01ba5a8ce35cb50a13a1
+        );
+        addPairInternal(
+            "OP_USD",
+            0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf
+        );
+        addPairInternal(
+            "ARB_USD",
+            0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5
+        );
+        addPairInternal(
+            "DOGE_USD",
+            0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c
+        );
+        addPairInternal(
+            "BONK_USD",
+            0x72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419
         );
     }
 

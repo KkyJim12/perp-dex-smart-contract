@@ -345,8 +345,8 @@ contract PerpDEX {
         uint256 totalSupply,
         uint256 currentTVL,
         uint256 contractBalance,
-        uint256 totalOpenMargin,
-        uint256 secondaryVaultBalance,
+        uint256 _totalOpenMargin,
+        uint256 _secondaryVaultBalance,
         uint256 reserved,
         uint256 calculatedUSDC,
         uint256 userPercentage,
@@ -357,8 +357,8 @@ contract PerpDEX {
         totalSupply = ppUSDC.totalSupply();
         currentTVL = getPoolValue();
         contractBalance = usdc.balanceOf(address(this));
-        totalOpenMargin = totalOpenMargin;
-        secondaryVaultBalance = secondaryVaultBalance;
+        _totalOpenMargin = totalOpenMargin;
+        _secondaryVaultBalance = secondaryVaultBalance;
         reserved = totalOpenMargin + secondaryVaultBalance;
         calculatedUSDC = totalSupply > 0 ? (ppUSDCAmount * currentTVL) / totalSupply : 0;
         userPercentage = totalSupply > 0 ? (ppUSDCAmount * 10000) / totalSupply : 0;
@@ -1054,9 +1054,9 @@ contract PerpDEX {
                             ? (int256(pos.size) * (int256(pos.stopLoss) - int256(pos.entryPrice))) / int256(pos.entryPrice)
                             : (int256(pos.size) * (int256(pos.entryPrice) - int256(pos.stopLoss))) / int256(pos.entryPrice);
                         
-                        PairFunding storage pf = pairFunding[pos.pairs];
-                        int256 fundingPayment = (int256(pos.size) * (pf.growth - pos.fundingEntry)) / int256(ONE);
-                        int256 slEquity = int256(pos.margin) + slPnl - fundingPayment;
+                        PairFunding storage pfSL = pairFunding[pos.pairs];
+                        int256 fundingPaymentSL = (int256(pos.size) * (pfSL.growth - pos.fundingEntry)) / int256(ONE);
+                        int256 slEquity = int256(pos.margin) + slPnl - fundingPaymentSL;
                         
                         // If SL gives better outcome than liquidation (equity > 0), execute SL
                         if (slEquity > 0) {

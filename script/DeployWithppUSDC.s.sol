@@ -39,9 +39,9 @@ contract DeployWithppUSDC is Script {
         console.log("PerpDex deployed at:");
         console.log(address(perpDex));
 
-        // 3. Set PerpDex address in ppUSDC (allows minting/burning)
-        lpToken.setPerpDex(address(perpDex));
-        console.log("ppUSDC configured with PerpDex address");
+        // 3. Set PerpDex as authorized minter in ppUSDC (allows minting/burning)
+        lpToken.setMinter(address(perpDex), true);
+        console.log("ppUSDC configured with PerpDex as authorized minter");
 
         // 4. Optional: Transfer ppUSDC ownership to a multisig or DAO
         // lpToken.transferOwnership(multisigAddress);

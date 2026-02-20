@@ -1,0 +1,1058 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+
+interface IocUSDC {
+    function mint(address to, uint256 amount) external;
+    function burn(address from, uint256 amount) external;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+}
+
+/**
+ * @title OneClickPerpDex
+ * @dev Backend-managed perpetual trading with internal balance system and separate LP vault
+ * - Users deposit USDC first into their internal balance
+ * - Backend handles position management (open/close/TP/SL) using user's deposited funds
+ * - Users can withdraw their available balance (not locked in positions) anytime
+ * - Has its own LP vault (separate from main PerpDex)
+ * - Uses separate ocUSDC token for this vault
+ */
+contract OneClickPerpDex is Ownable, ReentrancyGuard {
+    ERC20 public immutable usdc;
+    IocUSDC public immutable ocUSDC; // LP token for this vault (OneClickPerpDex Pool USDC)
+
+    uint256 public constant ONE = 1e18;
+    uint256 public constant WINNING_FEE_BPS = 200; // 2% fee on winning positions only
+    uint256 public constant SPREAD_BPS = 0;
+    uint256 public constant MAX_LEVERAGE = 100;
+    uint256 public constant MIN_MARGIN = 1e6; // 1 USDC
+    uint256 public constant MAX_PNL_RATIO = 5e18; // 500%
+
+    struct Position {
+        bytes32 id;
+        string pairs;
+        bool isLong;
+        uint256 margin;
+        uint256 leverage;
+        uint256 size;
+        uint256 entryPrice;
+        bool isClosed;
+        uint256 closePrice;
+        uint256 payout;
+        uint256 liquidationPrice;
+        uint256 fees;
+        uint256 takeProfit;
+        uint256 stopLoss;
+    }
+
+    struct PairInfo {
+        string name;
+        bool active;
+        uint256 maxOIPercentage; // Max OI as percentage of pool (in basis points, e.g., 2000 = 20%)
+        uint256 maxPositionSize; // Max size per position in USDC (e.g., 5000e6 = 5000 USDC)
+        uint256 currentOI; // Current total open interest for this pair
+        uint256 minLeverage; // Minimum leverage allowed (e.g., 2 = 2x)
+        uint256 maxLeverage; // Maximum leverage allowed (e.g., 100 = 100x)
+    }
+
+    mapping(address => Position[]) public positions;
+    mapping(address => string) public username;
+    mapping(string => address) public usernameTaken;
+    mapping(string => PairInfo) public pairInfo;
+
+    PairInfo[] public allPairs;
+    address[] public allUsers;
+
+    uint256 public totalOpenMargin;
+
+    // User fund management (internal balance)
+    mapping(address => uint256) public userBalances;
+    mapping(address => uint256) public lockedBalances;
+
+    // Vault PnL Tracking
+    int256 public vaultTotalPnL;
+    uint256 public vaultTotalProfit;
+    uint256 public vaultTotalLoss;
+
+    // Secondary Vault (Fee Vault)
+    uint256 public totalSecondaryShares;
+    mapping(address => uint256) public secondaryShares;
+    uint256 public secondaryVaultBalance;
+
+    // Backend authorization
+    mapping(address => bool) public authorizedBackends;
+
+    event OpenPosition(
+        bytes32 indexed id,
+        address indexed user,
+        string pairs,
+        bool isLong,
+        uint256 margin,
+        uint256 leverage,
+        uint256 size,
+        uint256 entryPrice,
+        uint256 liquidationPrice,
+        uint256 fees,
+        uint256 takeProfit,
+        uint256 stopLoss
+    );
+
+    event ClosePosition(
+        bytes32 indexed id,
+        address indexed user,
+        uint256 closePrice,
+        uint256 payout,
+        uint256 closeFee,
+        string status
+    );
+
+    event Deposit(address indexed user, uint256 amount, uint256 newBalance);
+    event Withdraw(address indexed user, uint256 amount, uint256 newBalance);
+    event RegisterUser(address indexed userAddress, string username);
+    event PairAdded(string name);
+    event PairStatus(string name, bool active);
+    event AllPositionsClosed(address indexed admin, uint256 timestamp);
+    event TPSLModified(bytes32 indexed positionId, address indexed user, uint256 newTakeProfit, uint256 newStopLoss);
+    event FeeCollected(bytes32 indexed positionId, address indexed user, uint256 feeAmount);
+    event LPDeposit(address indexed user, uint256 amount, uint256 shares);
+    event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
+    event SecondaryVaultDeposit(address indexed user, uint256 amount, uint256 shares);
+    event SecondaryVaultWithdraw(address indexed user, uint256 amount, uint256 shares);
+    event VaultBackupUsed(uint256 amount, uint256 timestamp);
+    event BackendAuthorized(address indexed backend, bool authorized);
+
+    modifier onlyAuthorizedBackend() {
+        require(authorizedBackends[msg.sender], "Not authorized backend");
+        _;
+    }
+
+    constructor(address _usdc, address _ocUSDC) Ownable(msg.sender) {
+        require(_usdc != address(0) && _ocUSDC != address(0), "Invalid address");
+        usdc = ERC20(_usdc);
+        ocUSDC = IocUSDC(_ocUSDC);
+        _addInitialPairs();
+    }
+
+    receive() external payable {}
+
+    function _addInitialPairs() internal {
+        // Major Cryptocurrencies with OI limits, position size limits, and leverage limits
+        // maxOIPercentage in basis points (10000 = 100%)
+        // maxPositionSize in USDC (with 6 decimals)
+        // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
+        
+        addPairInternal("BTC_USD", 2000, 5000e6, 2, 100);    // 20% pool, 5000 USDC max, 2-100x
+        addPairInternal("ETH_USD", 1000, 3000e6, 2, 100);    // 10% pool, 3000 USDC max, 2-100x
+        addPairInternal("SOL_USD", 500, 2000e6, 2, 75);      // 5% pool, 2000 USDC max, 2-75x
+        addPairInternal("BNB_USD", 800, 2500e6, 2, 75);      // 8% pool, 2500 USDC max, 2-75x
+        addPairInternal("SUI_USD", 500, 1500e6, 2, 50);      // 5% pool, 1500 USDC max, 2-50x
+        addPairInternal("XRP_USD", 500, 1500e6, 2, 50);      // 5% pool, 1500 USDC max, 2-50x
+        addPairInternal("OP_USD", 400, 1000e6, 2, 50);       // 4% pool, 1000 USDC max, 2-50x
+        addPairInternal("ARB_USD", 400, 1000e6, 2, 50);      // 4% pool, 1000 USDC max, 2-50x
+        addPairInternal("DOGE_USD", 300, 800e6, 2, 50);      // 3% pool, 800 USDC max, 2-50x
+    }
+
+    function addPairInternal(
+        string memory pairs,
+        uint256 maxOIPercentage,
+        uint256 maxPositionSize,
+        uint256 minLeverage,
+        uint256 maxLeverage
+    ) internal {
+        pairInfo[pairs] = PairInfo(pairs, true, maxOIPercentage, maxPositionSize, 0, minLeverage, maxLeverage);
+        allPairs.push(pairInfo[pairs]);
+        emit PairAdded(pairs);
+        emit PairStatus(pairs, true);
+    }
+
+    // ------------------------------------------------------------------
+    // BACKEND MANAGEMENT
+    // ------------------------------------------------------------------
+
+    function authorizeBackend(address backend, bool authorized) external onlyOwner {
+        authorizedBackends[backend] = authorized;
+        emit BackendAuthorized(backend, authorized);
+    }
+
+    // ------------------------------------------------------------------
+    // USER FUND MANAGEMENT (Deposit/Withdraw)
+    // ------------------------------------------------------------------
+
+    function deposit(uint256 amount) external nonReentrant {
+        require(amount > 0, "Amount must be > 0");
+        
+        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        
+        userBalances[msg.sender] += amount;
+        
+        emit Deposit(msg.sender, amount, userBalances[msg.sender]);
+    }
+
+    function withdraw(uint256 amount) external nonReentrant {
+        require(amount > 0, "Amount must be > 0");
+        
+        uint256 availableBalance = getAvailableBalance(msg.sender);
+        require(availableBalance >= amount, "Insufficient available balance");
+        
+        userBalances[msg.sender] -= amount;
+        
+        require(usdc.transfer(msg.sender, amount), "Transfer failed");
+        
+        emit Withdraw(msg.sender, amount, userBalances[msg.sender]);
+    }
+
+    function getAvailableBalance(address user) public view returns (uint256) {
+        uint256 totalBalance = userBalances[user];
+        uint256 locked = lockedBalances[user];
+        return totalBalance > locked ? totalBalance - locked : 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Register Username
+    // ------------------------------------------------------------------
+    
+    function registerUsername(string calldata newName) external {
+        require(bytes(newName).length > 0, "Empty username");
+        require(usernameTaken[newName] == address(0), "Name already used");
+
+        string memory oldName = username[msg.sender];
+
+        if (bytes(oldName).length > 0) {
+            usernameTaken[oldName] = address(0);
+        } else {
+            allUsers.push(msg.sender);
+        }
+
+        username[msg.sender] = newName;
+        usernameTaken[newName] = msg.sender;
+
+        emit RegisterUser(msg.sender, newName);
+    }
+
+    // ------------------------------------------------------------------
+    // LP VAULT (Separate from main PerpDex)
+    // ------------------------------------------------------------------
+
+    function getPoolValue() public view returns (uint256) {
+        uint256 bal = usdc.balanceOf(address(this));
+        // Subtract user funds (internal balances), open margin, and secondary vault
+        uint256 userFunds = getTotalUserFunds();
+        uint256 reserved = userFunds + totalOpenMargin + secondaryVaultBalance;
+        return bal > reserved ? bal - reserved : 0;
+    }
+
+    function getTotalUserFunds() public view returns (uint256) {
+        uint256 total = 0;
+        for (uint256 i = 0; i < allUsers.length; i++) {
+            total += userBalances[allUsers[i]];
+        }
+        return total;
+    }
+
+    function getocUSDCPrice() external view returns (uint256) {
+        uint256 totalSupply = ocUSDC.totalSupply();
+        if (totalSupply == 0) return ONE;
+        uint256 pool = getPoolValue();
+        return (pool * ONE) / totalSupply;
+    }
+
+    function depositLP(uint256 amount) external nonReentrant {
+        require(amount > 0, "Amount must be > 0");
+        uint256 poolBefore = getPoolValue();
+        uint256 totalSupply = ocUSDC.totalSupply();
+
+        uint256 ocUSDCToMint = (totalSupply == 0 || poolBefore == 0)
+            ? amount
+            : (amount * totalSupply) / poolBefore;
+
+        require(ocUSDCToMint > 0, "Shares must be > 0");
+
+        // User transfers USDC directly (signs transaction)
+        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+
+        ocUSDC.mint(msg.sender, ocUSDCToMint);
+
+        emit LPDeposit(msg.sender, amount, ocUSDCToMint);
+    }
+
+    function withdrawLP(uint256 ocUSDCAmount) external nonReentrant {
+        require(ocUSDCAmount > 0, "Amount must be > 0");
+        
+        uint256 userBalance = ocUSDC.balanceOf(msg.sender);
+        require(userBalance >= ocUSDCAmount, "Insufficient ocUSDC");
+
+        uint256 pool = getPoolValue();
+        require(pool > 0, "Pool empty");
+
+        uint256 totalSupply = ocUSDC.totalSupply();
+        
+        uint256 usdcAmount = (ocUSDCAmount * pool) / totalSupply;
+        require(usdcAmount > 0, "Amount must be > 0");
+
+        ocUSDC.burn(msg.sender, ocUSDCAmount);
+
+        // Transfer USDC directly to user
+        require(usdc.transfer(msg.sender, usdcAmount), "Transfer failed");
+
+        emit LPWithdraw(msg.sender, usdcAmount, ocUSDCAmount);
+    }
+
+    // ------------------------------------------------------------------
+    // VAULT PnL TRACKING
+    // ------------------------------------------------------------------
+    
+    function getVaultPnL() external view returns (int256) {
+        return vaultTotalPnL;
+    }
+
+    function getVaultStats()
+        external
+        view
+        returns (
+            int256 totalPnL,
+            uint256 totalProfit,
+            uint256 totalLoss,
+            uint256 netProfit
+        )
+    {
+        totalPnL = vaultTotalPnL;
+        totalProfit = vaultTotalProfit;
+        totalLoss = vaultTotalLoss;
+        netProfit = vaultTotalProfit > vaultTotalLoss
+            ? vaultTotalProfit - vaultTotalLoss
+            : 0;
+    }
+
+    // ------------------------------------------------------------------
+    // SECONDARY VAULT (FEE VAULT)
+    // ------------------------------------------------------------------
+
+    function getSecondaryVaultValue() public view returns (uint256) {
+        return secondaryVaultBalance;
+    }
+
+    function getSecondarySharePrice() external view returns (uint256) {
+        if (totalSecondaryShares == 0) return ONE;
+        return (secondaryVaultBalance * ONE) / totalSecondaryShares;
+    }
+
+    function depositSecondaryVault(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be > 0");
+        uint256 vaultBefore = secondaryVaultBalance;
+
+        uint256 shares = (totalSecondaryShares == 0 || vaultBefore == 0)
+            ? amount
+            : (amount * totalSecondaryShares) / vaultBefore;
+
+        require(shares > 0, "Shares must be > 0");
+
+        require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+
+        secondaryShares[msg.sender] += shares;
+        totalSecondaryShares += shares;
+        secondaryVaultBalance += amount;
+
+        emit SecondaryVaultDeposit(msg.sender, amount, shares);
+    }
+
+    function withdrawSecondaryVault(uint256 shares) external onlyOwner {
+        require(shares > 0, "Shares must be > 0");
+        uint256 userShares = secondaryShares[msg.sender];
+        require(userShares >= shares, "Insufficient shares");
+
+        uint256 vault = secondaryVaultBalance;
+        require(vault > 0, "Vault empty");
+
+        uint256 amount = (shares * vault) / totalSecondaryShares;
+        require(amount > 0, "Amount must be > 0");
+
+        secondaryShares[msg.sender] = userShares - shares;
+        totalSecondaryShares -= shares;
+        secondaryVaultBalance -= amount;
+
+        require(usdc.transfer(msg.sender, amount), "Transfer failed");
+        emit SecondaryVaultWithdraw(msg.sender, amount, shares);
+    }
+
+    function useSecondaryVaultBackup(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be > 0");
+        require(secondaryVaultBalance >= amount, "Insufficient secondary vault");
+
+        secondaryVaultBalance -= amount;
+
+        emit VaultBackupUsed(amount, block.timestamp);
+    }
+
+    function _collectFeeToSecondaryVault(
+        uint256 feeAmount,
+        bytes32 positionId,
+        address user
+    ) internal {
+        if (feeAmount > 0) {
+            secondaryVaultBalance += feeAmount;
+            emit FeeCollected(positionId, user, feeAmount);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // OPEN POSITION (Backend Only)
+    // ------------------------------------------------------------------
+
+    function openPosition(
+        address user,
+        string calldata pairs,
+        bool isLong,
+        uint256 margin,
+        uint256 leverage,
+        uint256 entryPrice,
+        uint256 takeProfit,
+        uint256 stopLoss
+    ) external onlyAuthorizedBackend nonReentrant {
+        require(margin > 0 && leverage > 0, "Invalid margin or leverage");
+        require(margin >= MIN_MARGIN, "Margin too small");
+        require(leverage <= MAX_LEVERAGE, "Leverage too high");
+        require(entryPrice > 0, "Invalid entry price");
+        
+        PairInfo storage info = pairInfo[pairs];
+        require(info.active, "Pair not active");
+
+        // Validate leverage limits for this pair
+        require(leverage >= info.minLeverage, "Leverage below pair minimum");
+        require(leverage <= info.maxLeverage, "Leverage exceeds pair maximum");
+
+        // Calculate position size
+        uint256 netSize = margin * leverage;
+        
+        // Validate position size limit
+        require(netSize <= info.maxPositionSize, "Position size exceeds pair limit");
+
+        // Validate OI limit (as percentage of pool)
+        uint256 poolValue = getPoolValue();
+        require(poolValue > 0, "Pool is empty");
+        
+        uint256 newOI = info.currentOI + netSize;
+        uint256 maxAllowedOI = (poolValue * info.maxOIPercentage) / 10000;
+        
+        require(newOI <= maxAllowedOI, "Exceeds pair OI limit");
+
+        // Check user has sufficient available balance (internal balance system)
+        uint256 availableBalance = getAvailableBalance(user);
+        require(availableBalance >= margin, "Insufficient available balance");
+
+        // Lock user funds in internal balance
+        lockedBalances[user] += margin;
+        totalOpenMargin += margin;
+        
+        // Update pair OI
+        info.currentOI += netSize;
+
+        _finalizeOpenPosition(
+            user,
+            pairs,
+            isLong,
+            margin,
+            leverage,
+            netSize,
+            0,
+            entryPrice,
+            takeProfit,
+            stopLoss
+        );
+    }
+
+    function _finalizeOpenPosition(
+        address user,
+        string calldata pairs,
+        bool isLong,
+        uint256 netMargin,
+        uint256 leverage,
+        uint256 netSize,
+        uint256 fees,
+        uint256 entryPrice,
+        uint256 tp,
+        uint256 sl
+    ) internal {
+        uint256 liquidationPrice = calculateLiquidationPrice(
+            entryPrice,
+            netSize,
+            netMargin,
+            isLong
+        );
+
+        bytes32 id = keccak256(
+            abi.encodePacked(user, block.timestamp, block.number)
+        );
+
+        positions[user].push(
+            Position(
+                id,
+                pairs,
+                isLong,
+                netMargin,
+                leverage,
+                netSize,
+                entryPrice,
+                false,
+                0,
+                0,
+                liquidationPrice,
+                fees,
+                tp,
+                sl
+            )
+        );
+
+        emit OpenPosition(
+            id,
+            user,
+            pairs,
+            isLong,
+            netMargin,
+            leverage,
+            netSize,
+            entryPrice,
+            liquidationPrice,
+            fees,
+            tp,
+            sl
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // MODIFY TP / SL
+    // ------------------------------------------------------------------
+
+    function modifyTpSl(
+        bytes32 positionId,
+        uint256 newTP,
+        uint256 newSL
+    ) external {
+        Position[] storage userPositions = positions[msg.sender];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (pos.id == positionId && !pos.isClosed) {
+                pos.takeProfit = newTP;
+                pos.stopLoss = newSL;
+
+                emit TPSLModified(positionId, msg.sender, newTP, newSL);
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ------------------------------------------------------------------
+    // CLOSE POSITION (Backend Only)
+    // ------------------------------------------------------------------
+
+    function closePosition(
+        address user,
+        bytes32 positionId,
+        uint256 closePrice
+    ) external onlyAuthorizedBackend nonReentrant {
+        Position[] storage userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (!pos.isClosed && pos.id == positionId) {
+                require(closePrice > 0, "Invalid close price");
+                _closePosition(user, pos, closePrice, "close");
+                return;
+            }
+        }
+        revert("Position not found");
+    }
+
+    // ------------------------------------------------------------------
+    // TP/SL TRIGGER (Backend Only)
+    // ------------------------------------------------------------------
+
+    function triggerTpSl(
+        address user,
+        bytes32 positionId,
+        uint256 currentPrice
+    ) external onlyAuthorizedBackend nonReentrant {
+        Position[] storage userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (!pos.isClosed && pos.id == positionId) {
+                require(currentPrice > 0, "Invalid price");
+
+                bool hitTP = false;
+                bool hitSL = false;
+                string memory status = "";
+                uint256 closePrice = currentPrice;
+
+                if (pos.takeProfit > 0) {
+                    if (pos.isLong && currentPrice >= pos.takeProfit) {
+                        hitTP = true;
+                        status = "tp";
+                        closePrice = pos.takeProfit;
+                    }
+                    if (!pos.isLong && currentPrice <= pos.takeProfit) {
+                        hitTP = true;
+                        status = "tp";
+                        closePrice = pos.takeProfit;
+                    }
+                }
+
+                if (pos.stopLoss > 0) {
+                    if (pos.isLong && currentPrice <= pos.stopLoss) {
+                        hitSL = true;
+                        status = "sl";
+                        closePrice = pos.stopLoss;
+                    }
+                    if (!pos.isLong && currentPrice >= pos.stopLoss) {
+                        hitSL = true;
+                        status = "sl";
+                        closePrice = pos.stopLoss;
+                    }
+                }
+
+                require(hitTP || hitSL, "No TP/SL triggered");
+
+                _closePosition(user, pos, closePrice, status);
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ------------------------------------------------------------------
+    // LIQUIDATION (Backend Only)
+    // ------------------------------------------------------------------
+
+    function liquidate(
+        address user,
+        bytes32 positionId,
+        uint256 price
+    ) external onlyAuthorizedBackend nonReentrant {
+        Position[] storage userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            Position storage pos = userPositions[i];
+
+            if (!pos.isClosed && pos.id == positionId) {
+                require(price > 0, "Invalid price");
+
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) / int256(pos.entryPrice);
+
+                int256 equity = int256(pos.margin) + pnl;
+
+                require(equity <= 0, "Not liquidatable");
+
+                // Unlock user funds from internal balance
+                if (lockedBalances[user] >= pos.margin) {
+                    lockedBalances[user] -= pos.margin;
+                } else {
+                    lockedBalances[user] = 0;
+                }
+
+                if (totalOpenMargin >= pos.margin) {
+                    totalOpenMargin -= pos.margin;
+                } else {
+                    totalOpenMargin = 0;
+                }
+
+                // Decrease pair OI
+                PairInfo storage info = pairInfo[pos.pairs];
+                if (info.currentOI >= pos.size) {
+                    info.currentOI -= pos.size;
+                } else {
+                    info.currentOI = 0;
+                }
+
+                // Deduct full margin from user's internal balance (100% loss)
+                if (userBalances[user] >= pos.margin) {
+                    userBalances[user] -= pos.margin;
+                } else {
+                    userBalances[user] = 0;
+                }
+
+                // Track vault PnL - vault gains the full margin
+                int256 vaultPnL = int256(pos.margin);
+                vaultTotalPnL += vaultPnL;
+                vaultTotalProfit += pos.margin;
+
+                pos.isClosed = true;
+                pos.closePrice = price;
+                pos.payout = 0;
+
+                emit ClosePosition(pos.id, user, price, 0, 0, "liquidate");
+                return;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    // ------------------------------------------------------------------
+    // INTERNAL CLOSE LOGIC
+    // ------------------------------------------------------------------
+
+    function _closePosition(
+        address user,
+        Position storage pos,
+        uint256 price,
+        string memory status
+    ) internal {
+        int256 pnl = pos.isLong
+            ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+            : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) / int256(pos.entryPrice);
+
+        int256 cappedPnl = pnl;
+        if (cappedPnl > 0) {
+            int256 maxPnl = int256((pos.margin * MAX_PNL_RATIO) / ONE);
+            if (cappedPnl > maxPnl) cappedPnl = maxPnl;
+        }
+
+        int256 rawPayout = int256(pos.margin) + cappedPnl;
+        uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
+
+        // Calculate vault PnL (opposite of user PnL)
+        int256 userPnL = int256(payout) - int256(pos.margin);
+        int256 vaultPnL = -userPnL;
+
+        // Track realized vault PnL
+        vaultTotalPnL += vaultPnL;
+        if (vaultPnL > 0) {
+            vaultTotalProfit += uint256(vaultPnL);
+        } else if (vaultPnL < 0) {
+            vaultTotalLoss += uint256(-vaultPnL);
+        }
+
+        // Apply 2% fee ONLY on winning positions
+        uint256 closeFee = 0;
+        if (payout > pos.margin) {
+            uint256 profit = payout - pos.margin;
+            closeFee = (profit * WINNING_FEE_BPS) / 10000;
+            payout = payout - closeFee;
+
+            _collectFeeToSecondaryVault(closeFee, pos.id, user);
+        }
+
+        // Unlock user funds from internal balance
+        if (lockedBalances[user] >= pos.margin) {
+            lockedBalances[user] -= pos.margin;
+        } else {
+            lockedBalances[user] = 0;
+        }
+
+        if (totalOpenMargin >= pos.margin) {
+            totalOpenMargin -= pos.margin;
+        } else {
+            totalOpenMargin = 0;
+        }
+
+        // Decrease pair OI
+        PairInfo storage info = pairInfo[pos.pairs];
+        if (info.currentOI >= pos.size) {
+            info.currentOI -= pos.size;
+        } else {
+            info.currentOI = 0;
+        }
+
+        // Update user internal balance with payout
+        // If user made profit, add to balance; if loss, deduct from balance
+        if (payout > pos.margin) {
+            // User made profit - add the profit to their balance
+            uint256 profit = payout - pos.margin;
+            userBalances[user] += profit;
+        } else if (payout < pos.margin) {
+            // User made loss - deduct the loss from their balance
+            uint256 loss = pos.margin - payout;
+            if (userBalances[user] >= loss) {
+                userBalances[user] -= loss;
+            } else {
+                userBalances[user] = 0;
+            }
+        }
+        // If payout == margin, no change to balance (break even)
+
+        pos.isClosed = true;
+        pos.closePrice = price;
+        pos.payout = payout;
+
+        emit ClosePosition(pos.id, user, price, payout, closeFee, status);
+    }
+
+    // ------------------------------------------------------------------
+    // ADMIN EMERGENCY CLOSE ALL
+    // ------------------------------------------------------------------
+
+    function closeAllPositions(
+        uint256 btcPrice,
+        uint256 ethPrice,
+        uint256 solPrice
+    ) external onlyOwner {
+        for (uint256 u = 0; u < allUsers.length; u++) {
+            address user = allUsers[u];
+            Position[] storage userPositions = positions[user];
+
+            for (uint256 i = 0; i < userPositions.length; i++) {
+                Position storage pos = userPositions[i];
+
+                if (!pos.isClosed) {
+                    uint256 price = 0;
+
+                    if (keccak256(bytes(pos.pairs)) == keccak256(bytes("BTC_USD"))) {
+                        price = btcPrice;
+                    } else if (keccak256(bytes(pos.pairs)) == keccak256(bytes("ETH_USD"))) {
+                        price = ethPrice;
+                    } else if (keccak256(bytes(pos.pairs)) == keccak256(bytes("SOL_USD"))) {
+                        price = solPrice;
+                    }
+
+                    if (price > 0) {
+                        _closePosition(user, pos, price, "close");
+                    }
+                }
+            }
+        }
+
+        emit AllPositionsClosed(msg.sender, block.timestamp);
+    }
+
+    // ------------------------------------------------------------------
+    // ADMIN FUNCTIONS - Pair Configuration
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Update pair configuration (owner only)
+     * @param pairs Trading pair name (e.g., "BTC_USD")
+     * @param maxOIPercentage Max OI as percentage of pool in basis points (e.g., 2000 = 20%)
+     * @param maxPositionSize Max position size in USDC (e.g., 5000e6 = 5000 USDC)
+     * @param minLeverage Minimum leverage allowed (e.g., 2 = 2x)
+     * @param maxLeverage Maximum leverage allowed (e.g., 100 = 100x)
+     */
+    function updatePairConfig(
+        string calldata pairs,
+        uint256 maxOIPercentage,
+        uint256 maxPositionSize,
+        uint256 minLeverage,
+        uint256 maxLeverage
+    ) external onlyOwner {
+        PairInfo storage info = pairInfo[pairs];
+        require(bytes(info.name).length > 0, "Pair does not exist");
+        require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
+        require(minLeverage <= maxLeverage, "Min leverage > max leverage");
+        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(maxPositionSize > 0, "Invalid position size");
+
+        info.maxOIPercentage = maxOIPercentage;
+        info.maxPositionSize = maxPositionSize;
+        info.minLeverage = minLeverage;
+        info.maxLeverage = maxLeverage;
+
+        emit PairConfigUpdated(pairs, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+    }
+
+    /**
+     * @notice Update pair active status (owner only)
+     * @param pairs Trading pair name
+     * @param active True to activate, false to deactivate
+     */
+    function setPairActive(string calldata pairs, bool active) external onlyOwner {
+        PairInfo storage info = pairInfo[pairs];
+        require(bytes(info.name).length > 0, "Pair does not exist");
+        
+        info.active = active;
+        emit PairStatus(pairs, active);
+    }
+
+    /**
+     * @notice Add a new trading pair (owner only)
+     * @param pairs Trading pair name
+     * @param maxOIPercentage Max OI percentage in basis points
+     * @param maxPositionSize Max position size in USDC
+     * @param minLeverage Minimum leverage
+     * @param maxLeverage Maximum leverage
+     */
+    function addPair(
+        string calldata pairs,
+        uint256 maxOIPercentage,
+        uint256 maxPositionSize,
+        uint256 minLeverage,
+        uint256 maxLeverage
+    ) external onlyOwner {
+        require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
+        require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
+        require(minLeverage <= maxLeverage, "Min leverage > max leverage");
+        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(maxPositionSize > 0, "Invalid position size");
+
+        addPairInternal(pairs, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+    }
+
+    event PairConfigUpdated(
+        string indexed pairs,
+        uint256 maxOIPercentage,
+        uint256 maxPositionSize,
+        uint256 minLeverage,
+        uint256 maxLeverage
+    );
+
+    // ------------------------------------------------------------------
+    // HELPERS
+    // ------------------------------------------------------------------
+
+    function calculateLiquidationPrice(
+        uint256 entryPrice,
+        uint256 size,
+        uint256 margin,
+        bool isLong
+    ) internal pure returns (uint256) {
+        uint256 priceChange = (entryPrice * margin) / size;
+        return isLong ? entryPrice - priceChange : entryPrice + priceChange;
+    }
+
+    function applySpread(
+        uint256 price,
+        bool isLong,
+        bool isEntry
+    ) internal pure returns (uint256) {
+        uint256 spread = (price * SPREAD_BPS) / 10000;
+        if (isEntry) return isLong ? price + spread : price - spread;
+        return isLong ? price - spread : price + spread;
+    }
+
+    // ------------------------------------------------------------------
+    // VIEW FUNCTIONS
+    // ------------------------------------------------------------------
+
+    function getUserPositions(address user) external view returns (Position[] memory) {
+        return positions[user];
+    }
+
+    function getUserActivePositions(address user) external view returns (Position[] memory) {
+        Position[] memory userPositions = positions[user];
+        uint256 activeCount = 0;
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (!userPositions[i].isClosed) {
+                activeCount++;
+            }
+        }
+
+        Position[] memory activePositions = new Position[](activeCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (!userPositions[i].isClosed) {
+                activePositions[index] = userPositions[i];
+                index++;
+            }
+        }
+
+        return activePositions;
+    }
+
+    function getPosition(address user, bytes32 positionId)
+        external
+        view
+        returns (Position memory)
+    {
+        Position[] memory userPositions = positions[user];
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (userPositions[i].id == positionId) {
+                return userPositions[i];
+            }
+        }
+        revert("Position not found");
+    }
+
+    function isPositionLiquidatable(
+        address user,
+        bytes32 positionId,
+        uint256 currentPrice
+    ) external view returns (bool) {
+        Position[] memory userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (userPositions[i].id == positionId && !userPositions[i].isClosed) {
+                Position memory pos = userPositions[i];
+
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
+
+                int256 equity = int256(pos.margin) + pnl;
+                return equity <= 0;
+            }
+        }
+
+        return false;
+    }
+
+    function getPositionEquity(
+        address user,
+        bytes32 positionId,
+        uint256 currentPrice
+    ) external view returns (int256) {
+        Position[] memory userPositions = positions[user];
+
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (userPositions[i].id == positionId && !userPositions[i].isClosed) {
+                Position memory pos = userPositions[i];
+
+                int256 pnl = pos.isLong
+                    ? (int256(pos.size) * (int256(currentPrice) - int256(pos.entryPrice))) / int256(pos.entryPrice)
+                    : (int256(pos.size) * (int256(pos.entryPrice) - int256(currentPrice))) / int256(pos.entryPrice);
+
+                return int256(pos.margin) + pnl;
+            }
+        }
+
+        revert("Position not found");
+    }
+
+    function getUserInfo(address user)
+        external
+        view
+        returns (
+            uint256 totalBalance,
+            uint256 lockedBalance,
+            uint256 availableBalance,
+            uint256 activePositions
+        )
+    {
+        totalBalance = userBalances[user];
+        lockedBalance = lockedBalances[user];
+        availableBalance = getAvailableBalance(user);
+
+        Position[] memory userPositions = positions[user];
+        for (uint256 i = 0; i < userPositions.length; i++) {
+            if (!userPositions[i].isClosed) {
+                activePositions++;
+            }
+        }
+    }
+
+    function getAllPairs() external view returns (PairInfo[] memory) {
+        return allPairs;
+    }
+
+    function getAllUsers() external view returns (address[] memory) {
+        return allUsers;
+    }
+
+    function getocUSDCAddress() external view returns (address) {
+        return address(ocUSDC);
+    }
+
+    function getUSDCAddress() external view returns (address) {
+        return address(usdc);
+    }
+}

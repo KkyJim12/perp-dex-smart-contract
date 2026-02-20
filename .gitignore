@@ -2,16 +2,13 @@
 cache/
 out/
 
-# Ignores development broadcast logs
-!/broadcast
-/broadcast/*/31337/
-/broadcast/**/dry-run/
+# Broadcast logs - ignore all deployment logs
+broadcast/
 
-# Docs
-docs/
-
-# Dotenv file
+# Dotenv file - NEVER commit private keys or sensitive data
 .env
+.env.*
+!.env.example
 
 # IDE and Editor files
 .vscode/
@@ -47,6 +44,11 @@ deploy.log
 flatten/
 flattened/
 *.flat.sol
+*_flat.sol
+
+# Verification artifacts
+verify-*.txt
+verification-*.json
 
 # Coverage reports
 coverage/
@@ -68,6 +70,16 @@ mythril-report.json
 .env.development.local
 .env.test.local
 .env.production.local
+.env.backup
+
+# Sensitive files - NEVER commit
+*.key
+*.pem
+*.p12
+*.pfx
+private-keys.txt
+mnemonic.txt
+seed.txt
 
 # Package manager lock files (optional - team decision)
 # package-lock.json
@@ -84,3 +96,23 @@ hardhat.config.*
 
 # Remix IDE
 .remix/
+
+# Foundry specific
+lib/
+
+# Test artifacts
+test-results/
+test-output/
+
+# Scripts output
+scripts/output/
+scripts/logs/
+
+# Deployment addresses (if you want to keep them private)
+# deployments/
+# addresses.json
+
+# Local notes and TODO files
+TODO.local.md
+NOTES.local.md
+*.local.md

@@ -52,9 +52,10 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     struct PairInfo {
         string name;
         bool active;
-        uint256 maxOIPercentage; // Max OI as percentage of pool (in basis points, e.g., 2000 = 20%)
+        uint256 oiRatio; // OI ratio weight (e.g., BTC=10, ETH=5, SOL=3)
         uint256 maxPositionSize; // Max size per position in USDC (e.g., 5000e6 = 5000 USDC)
-        uint256 currentOI; // Current total open interest for this pair
+        uint256 currentLongOI; // Current long open interest for this pair
+        uint256 currentShortOI; // Current short open interest for this pair
         uint256 minLeverage; // Minimum leverage allowed (e.g., 2 = 2x)
         uint256 maxLeverage; // Maximum leverage allowed (e.g., 100 = 100x)
     }
@@ -68,6 +69,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     address[] public allUsers;
 
     uint256 public totalOpenMargin;
+    uint256 public totalOIRatio; // Sum of all pair OI ratios
 
     // User fund management (internal balance)
     mapping(address => uint256) public userBalances;
@@ -140,31 +142,34 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     receive() external payable {}
 
     function _addInitialPairs() internal {
-        // Major Cryptocurrencies with OI limits, position size limits, and leverage limits
-        // maxOIPercentage in basis points (10000 = 100%)
+        // Major Cryptocurrencies with OI ratios, position size limits, and leverage limits
+        // oiRatio: weight for OI distribution (higher = more OI allocation)
         // maxPositionSize in USDC (with 6 decimals)
         // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
         
-        addPairInternal("BTC_USD", 2000, 5000e6, 2, 100);    // 20% pool, 5000 USDC max, 2-100x
-        addPairInternal("ETH_USD", 1000, 3000e6, 2, 100);    // 10% pool, 3000 USDC max, 2-100x
-        addPairInternal("SOL_USD", 500, 2000e6, 2, 75);      // 5% pool, 2000 USDC max, 2-75x
-        addPairInternal("BNB_USD", 800, 2500e6, 2, 75);      // 8% pool, 2500 USDC max, 2-75x
-        addPairInternal("SUI_USD", 500, 1500e6, 2, 50);      // 5% pool, 1500 USDC max, 2-50x
-        addPairInternal("XRP_USD", 500, 1500e6, 2, 50);      // 5% pool, 1500 USDC max, 2-50x
-        addPairInternal("OP_USD", 400, 1000e6, 2, 50);       // 4% pool, 1000 USDC max, 2-50x
-        addPairInternal("ARB_USD", 400, 1000e6, 2, 50);      // 4% pool, 1000 USDC max, 2-50x
-        addPairInternal("DOGE_USD", 300, 800e6, 2, 50);      // 3% pool, 800 USDC max, 2-50x
+        // Total ratio will be: 10+5+3+4+2+2+2+2+1 = 31
+        
+        addPairInternal("BTC_USD", 10, 5000e6, 2, 100);    // Ratio weight 10 (highest)
+        addPairInternal("ETH_USD", 5, 3000e6, 2, 100);     // Ratio weight 5
+        addPairInternal("SOL_USD", 3, 2000e6, 2, 75);      // Ratio weight 3
+        addPairInternal("BNB_USD", 4, 2500e6, 2, 75);      // Ratio weight 4
+        addPairInternal("SUI_USD", 2, 1500e6, 2, 50);      // Ratio weight 2
+        addPairInternal("XRP_USD", 2, 1500e6, 2, 50);      // Ratio weight 2
+        addPairInternal("OP_USD", 2, 1000e6, 2, 50);       // Ratio weight 2
+        addPairInternal("ARB_USD", 2, 1000e6, 2, 50);      // Ratio weight 2
+        addPairInternal("DOGE_USD", 1, 800e6, 2, 50);      // Ratio weight 1 (lowest)
     }
 
     function addPairInternal(
         string memory pairs,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
     ) internal {
-        pairInfo[pairs] = PairInfo(pairs, true, maxOIPercentage, maxPositionSize, 0, minLeverage, maxLeverage);
+        pairInfo[pairs] = PairInfo(pairs, true, oiRatio, maxPositionSize, 0, 0, minLeverage, maxLeverage);
         allPairs.push(pairInfo[pairs]);
+        totalOIRatio += oiRatio; // Add to total ratio sum
         emit PairAdded(pairs);
         emit PairStatus(pairs, true);
     }
@@ -430,14 +435,23 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         // Validate position size limit
         require(netSize <= info.maxPositionSize, "Position size exceeds pair limit");
 
-        // Validate OI limit (as percentage of pool)
+        // Validate OI limit (based on ratio distribution, split 50/50 between long and short)
         uint256 poolValue = getPoolValue();
         require(poolValue > 0, "Pool is empty");
+        require(totalOIRatio > 0, "No pairs configured");
         
-        uint256 newOI = info.currentOI + netSize;
-        uint256 maxAllowedOI = (poolValue * info.maxOIPercentage) / 10000;
+        // Calculate max OI for this pair based on its ratio
+        // Formula: maxOI = (poolValue * pairRatio) / totalRatio
+        uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+        uint256 maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
         
-        require(newOI <= maxAllowedOI, "Exceeds pair OI limit");
+        if (isLong) {
+            uint256 newLongOI = info.currentLongOI + netSize;
+            require(newLongOI <= maxOIPerSide, "Exceeds long OI limit");
+        } else {
+            uint256 newShortOI = info.currentShortOI + netSize;
+            require(newShortOI <= maxOIPerSide, "Exceeds short OI limit");
+        }
 
         // Check user has sufficient available balance (internal balance system)
         uint256 availableBalance = getAvailableBalance(user);
@@ -447,8 +461,12 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         lockedBalances[user] += margin;
         totalOpenMargin += margin;
         
-        // Update pair OI
-        info.currentOI += netSize;
+        // Update pair OI (split by direction)
+        if (isLong) {
+            info.currentLongOI += netSize;
+        } else {
+            info.currentShortOI += netSize;
+        }
 
         _finalizeOpenPosition(
             user,
@@ -667,12 +685,20 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
                     totalOpenMargin = 0;
                 }
 
-                // Decrease pair OI
+                // Decrease pair OI (by direction)
                 PairInfo storage info = pairInfo[pos.pairs];
-                if (info.currentOI >= pos.size) {
-                    info.currentOI -= pos.size;
+                if (pos.isLong) {
+                    if (info.currentLongOI >= pos.size) {
+                        info.currentLongOI -= pos.size;
+                    } else {
+                        info.currentLongOI = 0;
+                    }
                 } else {
-                    info.currentOI = 0;
+                    if (info.currentShortOI >= pos.size) {
+                        info.currentShortOI -= pos.size;
+                    } else {
+                        info.currentShortOI = 0;
+                    }
                 }
 
                 // Deduct full margin from user's internal balance (100% loss)
@@ -757,12 +783,20 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
             totalOpenMargin = 0;
         }
 
-        // Decrease pair OI
+        // Decrease pair OI (by direction)
         PairInfo storage info = pairInfo[pos.pairs];
-        if (info.currentOI >= pos.size) {
-            info.currentOI -= pos.size;
+        if (pos.isLong) {
+            if (info.currentLongOI >= pos.size) {
+                info.currentLongOI -= pos.size;
+            } else {
+                info.currentLongOI = 0;
+            }
         } else {
-            info.currentOI = 0;
+            if (info.currentShortOI >= pos.size) {
+                info.currentShortOI -= pos.size;
+            } else {
+                info.currentShortOI = 0;
+            }
         }
 
         // Update user internal balance with payout
@@ -833,14 +867,14 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     /**
      * @notice Update pair configuration (owner only)
      * @param pairs Trading pair name (e.g., "BTC_USD")
-     * @param maxOIPercentage Max OI as percentage of pool in basis points (e.g., 2000 = 20%)
+     * @param oiRatio OI ratio weight (e.g., 10 for BTC, 5 for ETH)
      * @param maxPositionSize Max position size in USDC (e.g., 5000e6 = 5000 USDC)
      * @param minLeverage Minimum leverage allowed (e.g., 2 = 2x)
      * @param maxLeverage Maximum leverage allowed (e.g., 100 = 100x)
      */
     function updatePairConfig(
         string calldata pairs,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
@@ -849,15 +883,18 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         require(bytes(info.name).length > 0, "Pair does not exist");
         require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
-        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
 
-        info.maxOIPercentage = maxOIPercentage;
+        // Update total ratio
+        totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
+        
+        info.oiRatio = oiRatio;
         info.maxPositionSize = maxPositionSize;
         info.minLeverage = minLeverage;
         info.maxLeverage = maxLeverage;
 
-        emit PairConfigUpdated(pairs, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+        emit PairConfigUpdated(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
     }
 
     /**
@@ -876,14 +913,14 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     /**
      * @notice Add a new trading pair (owner only)
      * @param pairs Trading pair name
-     * @param maxOIPercentage Max OI percentage in basis points
+     * @param oiRatio OI ratio weight
      * @param maxPositionSize Max position size in USDC
      * @param minLeverage Minimum leverage
      * @param maxLeverage Maximum leverage
      */
     function addPair(
         string calldata pairs,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
@@ -891,14 +928,14 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
         require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
-        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
 
-        addPairInternal(pairs, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+        addPairInternal(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
     }
 
     event PairConfigUpdated(
-        string indexed pairs,
+        string pairs,
         uint256 maxOIPercentage,
         uint256 maxPositionSize,
         uint256 minLeverage,
@@ -1054,5 +1091,100 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
     function getUSDCAddress() external view returns (address) {
         return address(usdc);
+    }
+
+    /**
+     * @notice Get available OI for a trading pair
+     * @param pairs Trading pair name (e.g., "BTC_USD")
+     * @return maxOIPerSide Maximum OI allowed per side (long or short)
+     * @return currentLongOI Current long OI
+     * @return currentShortOI Current short OI
+     * @return availableLongOI Available OI for long positions
+     * @return availableShortOI Available OI for short positions
+     * @return maxPositionSize Maximum position size allowed
+     */
+    function getAvailableOI(string calldata pairs)
+        external
+        view
+        returns (
+            uint256 maxOIPerSide,
+            uint256 currentLongOI,
+            uint256 currentShortOI,
+            uint256 availableLongOI,
+            uint256 availableShortOI,
+            uint256 maxPositionSize
+        )
+    {
+        PairInfo storage info = pairInfo[pairs];
+        
+        uint256 poolValue = getPoolValue();
+        
+        if (totalOIRatio > 0) {
+            // Calculate max OI based on ratio: (poolValue * pairRatio) / totalRatio
+            uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+            maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
+        } else {
+            maxOIPerSide = 0;
+        }
+        
+        currentLongOI = info.currentLongOI;
+        currentShortOI = info.currentShortOI;
+        
+        availableLongOI = maxOIPerSide > currentLongOI ? maxOIPerSide - currentLongOI : 0;
+        availableShortOI = maxOIPerSide > currentShortOI ? maxOIPerSide - currentShortOI : 0;
+        
+        maxPositionSize = info.maxPositionSize;
+    }
+
+    /**
+     * @notice Get OI information for all pairs
+     * @return pairNames Array of pair names
+     * @return maxOIPerSides Array of max OI per side
+     * @return currentLongOIs Array of current long OIs
+     * @return currentShortOIs Array of current short OIs
+     * @return availableLongOIs Array of available long OIs
+     * @return availableShortOIs Array of available short OIs
+     */
+    function getAllPairsOI()
+        external
+        view
+        returns (
+            string[] memory pairNames,
+            uint256[] memory maxOIPerSides,
+            uint256[] memory currentLongOIs,
+            uint256[] memory currentShortOIs,
+            uint256[] memory availableLongOIs,
+            uint256[] memory availableShortOIs
+        )
+    {
+        uint256 length = allPairs.length;
+        pairNames = new string[](length);
+        maxOIPerSides = new uint256[](length);
+        currentLongOIs = new uint256[](length);
+        currentShortOIs = new uint256[](length);
+        availableLongOIs = new uint256[](length);
+        availableShortOIs = new uint256[](length);
+        
+        uint256 poolValue = getPoolValue();
+        
+        for (uint256 i = 0; i < length; i++) {
+            PairInfo storage info = allPairs[i];
+            
+            pairNames[i] = info.name;
+            
+            if (totalOIRatio > 0) {
+                // Calculate max OI based on ratio
+                uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+                maxOIPerSides[i] = maxAllowedOI / 2;
+            } else {
+                maxOIPerSides[i] = 0;
+            }
+            
+            currentLongOIs[i] = info.currentLongOI;
+            currentShortOIs[i] = info.currentShortOI;
+            
+            availableLongOIs[i] = maxOIPerSides[i] > info.currentLongOI ? maxOIPerSides[i] - info.currentLongOI : 0;
+            availableShortOIs[i] = maxOIPerSides[i] > info.currentShortOI ? maxOIPerSides[i] - info.currentShortOI : 0;
+        }
     }
 }

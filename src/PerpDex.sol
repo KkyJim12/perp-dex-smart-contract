@@ -66,7 +66,7 @@ contract PerpDEX {
         string name;
         bytes32 pythTokenId;
         bool active;
-        uint256 maxOIPercentage; // Max OI as percentage of pool (in basis points, e.g., 2000 = 20%)
+        uint256 oiRatio; // OI ratio weight (e.g., BTC=10, ETH=5, SOL=3)
         uint256 maxPositionSize; // Max size per position in USDC (e.g., 5000e6 = 5000 USDC)
         uint256 minLeverage; // Minimum leverage allowed (e.g., 2 = 2x)
         uint256 maxLeverage; // Maximum leverage allowed (e.g., 100 = 100x)
@@ -82,6 +82,7 @@ contract PerpDEX {
     address[] public allUsers;
 
     uint256 public totalOpenMargin;
+    uint256 public totalOIRatio; // Sum of all pair OI ratios
 
     // Secondary Vault (Fee Vault) - serves as backup for main vault
     uint256 public totalSecondaryShares;
@@ -200,15 +201,17 @@ contract PerpDEX {
     receive() external payable {}
 
     function _addInitialPairs() internal {
-        // Major Cryptocurrencies with OI limits, position size limits, and leverage limits
-        // maxOIPercentage in basis points (10000 = 100%)
+        // Major Cryptocurrencies with OI ratios, position size limits, and leverage limits
+        // oiRatio: weight for OI distribution (higher = more OI allocation)
         // maxPositionSize in USDC (with 6 decimals)
         // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
+        
+        // Total ratio will be: 10+5+3+4+2+2+2+2+1 = 31
         
         addPairInternal(
             "BTC_USD",
             0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,
-            2000,      // 20% of pool
+            10,        // Ratio weight 10 (highest)
             5000e6,    // 5000 USDC max per position
             2,         // Min 2x leverage
             100        // Max 100x leverage
@@ -216,7 +219,7 @@ contract PerpDEX {
         addPairInternal(
             "ETH_USD",
             0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,
-            1000,      // 10% of pool
+            5,         // Ratio weight 5
             3000e6,    // 3000 USDC max per position
             2,         // Min 2x leverage
             100        // Max 100x leverage
@@ -224,7 +227,7 @@ contract PerpDEX {
         addPairInternal(
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d,
-            500,       // 5% of pool
+            3,         // Ratio weight 3
             2000e6,    // 2000 USDC max per position
             2,         // Min 2x leverage
             75         // Max 75x leverage
@@ -232,7 +235,7 @@ contract PerpDEX {
         addPairInternal(
             "BNB_USD",
             0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f,
-            800,       // 8% of pool
+            4,         // Ratio weight 4
             2500e6,    // 2500 USDC max per position
             2,         // Min 2x leverage
             75         // Max 75x leverage
@@ -240,7 +243,7 @@ contract PerpDEX {
         addPairInternal(
             "SUI_USD",
             0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744,
-            500,       // 5% of pool
+            2,         // Ratio weight 2
             1500e6,    // 1500 USDC max per position
             2,         // Min 2x leverage
             50         // Max 50x leverage
@@ -248,7 +251,7 @@ contract PerpDEX {
         addPairInternal(
             "XRP_USD",
             0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8,
-            500,       // 5% of pool
+            2,         // Ratio weight 2
             1500e6,    // 1500 USDC max per position
             2,         // Min 2x leverage
             50         // Max 50x leverage
@@ -256,7 +259,7 @@ contract PerpDEX {
         addPairInternal(
             "OP_USD",
             0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf,
-            400,       // 4% of pool
+            2,         // Ratio weight 2
             1000e6,    // 1000 USDC max per position
             2,         // Min 2x leverage
             50         // Max 50x leverage
@@ -264,7 +267,7 @@ contract PerpDEX {
         addPairInternal(
             "ARB_USD",
             0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5,
-            400,       // 4% of pool
+            2,         // Ratio weight 2
             1000e6,    // 1000 USDC max per position
             2,         // Min 2x leverage
             50         // Max 50x leverage
@@ -272,7 +275,7 @@ contract PerpDEX {
         addPairInternal(
             "DOGE_USD",
             0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c,
-            300,       // 3% of pool
+            1,         // Ratio weight 1 (lowest)
             800e6,     // 800 USDC max per position
             2,         // Min 2x leverage
             50         // Max 50x leverage
@@ -282,13 +285,14 @@ contract PerpDEX {
     function addPairInternal(
         string memory pairs,
         bytes32 pythTokenId,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
     ) internal {
-        pairInfo[pairs] = PairInfo(pairs, pythTokenId, true, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+        pairInfo[pairs] = PairInfo(pairs, pythTokenId, true, oiRatio, maxPositionSize, minLeverage, maxLeverage);
         allPairs.push(pairInfo[pairs]);
+        totalOIRatio += oiRatio; // Add to total ratio sum
         emit PairAdded(pairs, pythTokenId);
         emit PairStatus(pairs, true);
     }
@@ -737,16 +741,25 @@ contract PerpDEX {
         // Validate position size limit
         require(netSize <= info.maxPositionSize, "Position size exceeds pair limit");
 
-        // Validate OI limit (as percentage of pool)
+        // Validate OI limit (based on ratio distribution, split 50/50 between long and short)
         uint256 poolValue = getPoolValue();
         require(poolValue > 0, "Pool is empty");
+        require(totalOIRatio > 0, "No pairs configured");
         
         PairFunding storage pf = pairFunding[pairs];
-        uint256 currentOI = pf.oiLong + pf.oiShort;
-        uint256 newOI = currentOI + netSize;
-        uint256 maxAllowedOI = (poolValue * info.maxOIPercentage) / 10000;
         
-        require(newOI <= maxAllowedOI, "Exceeds pair OI limit");
+        // Calculate max OI for this pair based on its ratio
+        // Formula: maxOI = (poolValue * pairRatio) / totalRatio
+        uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+        uint256 maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
+        
+        if (isLong) {
+            uint256 newLongOI = pf.oiLong + netSize;
+            require(newLongOI <= maxOIPerSide, "Exceeds long OI limit");
+        } else {
+            uint256 newShortOI = pf.oiShort + netSize;
+            require(newShortOI <= maxOIPerSide, "Exceeds short OI limit");
+        }
 
         PythStructs.Price memory token = _updateAndGetPythPrice(
             priceUpdateData,
@@ -801,7 +814,7 @@ contract PerpDEX {
 
         // No opening fee - use full margin
         uint256 netMargin = margin;
-        uint256 netSize = netMargin * leverage;
+        // netSize already calculated above
 
         totalOpenMargin += netMargin;
 
@@ -1298,14 +1311,14 @@ contract PerpDEX {
     /**
      * @notice Update pair configuration (owner only)
      * @param pairs Trading pair name (e.g., "BTC_USD")
-     * @param maxOIPercentage Max OI as percentage of pool in basis points (e.g., 2000 = 20%)
+     * @param oiRatio OI ratio weight (e.g., 10 for BTC, 5 for ETH)
      * @param maxPositionSize Max position size in USDC (e.g., 5000e6 = 5000 USDC)
      * @param minLeverage Minimum leverage allowed (e.g., 2 = 2x)
      * @param maxLeverage Maximum leverage allowed (e.g., 100 = 100x)
      */
     function updatePairConfig(
         string calldata pairs,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
@@ -1314,15 +1327,18 @@ contract PerpDEX {
         require(bytes(info.name).length > 0, "Pair does not exist");
         require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
-        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
 
-        info.maxOIPercentage = maxOIPercentage;
+        // Update total ratio
+        totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
+        
+        info.oiRatio = oiRatio;
         info.maxPositionSize = maxPositionSize;
         info.minLeverage = minLeverage;
         info.maxLeverage = maxLeverage;
 
-        emit PairConfigUpdated(pairs, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+        emit PairConfigUpdated(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
     }
 
     /**
@@ -1342,7 +1358,7 @@ contract PerpDEX {
      * @notice Add a new trading pair (owner only)
      * @param pairs Trading pair name
      * @param pythTokenId Pyth price feed ID
-     * @param maxOIPercentage Max OI percentage in basis points
+     * @param oiRatio OI ratio weight
      * @param maxPositionSize Max position size in USDC
      * @param minLeverage Minimum leverage
      * @param maxLeverage Maximum leverage
@@ -1350,7 +1366,7 @@ contract PerpDEX {
     function addPair(
         string calldata pairs,
         bytes32 pythTokenId,
-        uint256 maxOIPercentage,
+        uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
@@ -1358,14 +1374,14 @@ contract PerpDEX {
         require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
         require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
-        require(maxOIPercentage > 0 && maxOIPercentage <= 10000, "Invalid OI percentage");
+        require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
 
-        addPairInternal(pairs, pythTokenId, maxOIPercentage, maxPositionSize, minLeverage, maxLeverage);
+        addPairInternal(pairs, pythTokenId, oiRatio, maxPositionSize, minLeverage, maxLeverage);
     }
 
     event PairConfigUpdated(
-        string indexed pairs,
+        string pairs,
         uint256 maxOIPercentage,
         uint256 maxPositionSize,
         uint256 minLeverage,
@@ -1442,5 +1458,102 @@ contract PerpDEX {
 
     function getUSDCAddress() external view returns (address) {
         return address(usdc);
+    }
+
+    /**
+     * @notice Get available OI for a trading pair
+     * @param pairs Trading pair name (e.g., "BTC_USD")
+     * @return maxOIPerSide Maximum OI allowed per side (long or short)
+     * @return currentLongOI Current long OI
+     * @return currentShortOI Current short OI
+     * @return availableLongOI Available OI for long positions
+     * @return availableShortOI Available OI for short positions
+     * @return maxPositionSize Maximum position size allowed
+     */
+    function getAvailableOI(string calldata pairs)
+        external
+        view
+        returns (
+            uint256 maxOIPerSide,
+            uint256 currentLongOI,
+            uint256 currentShortOI,
+            uint256 availableLongOI,
+            uint256 availableShortOI,
+            uint256 maxPositionSize
+        )
+    {
+        PairInfo storage info = pairInfo[pairs];
+        PairFunding storage pf = pairFunding[pairs];
+        
+        uint256 poolValue = getPoolValue();
+        
+        if (totalOIRatio > 0) {
+            // Calculate max OI based on ratio: (poolValue * pairRatio) / totalRatio
+            uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+            maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
+        } else {
+            maxOIPerSide = 0;
+        }
+        
+        currentLongOI = pf.oiLong;
+        currentShortOI = pf.oiShort;
+        
+        availableLongOI = maxOIPerSide > currentLongOI ? maxOIPerSide - currentLongOI : 0;
+        availableShortOI = maxOIPerSide > currentShortOI ? maxOIPerSide - currentShortOI : 0;
+        
+        maxPositionSize = info.maxPositionSize;
+    }
+
+    /**
+     * @notice Get OI information for all pairs
+     * @return pairNames Array of pair names
+     * @return maxOIPerSides Array of max OI per side
+     * @return currentLongOIs Array of current long OIs
+     * @return currentShortOIs Array of current short OIs
+     * @return availableLongOIs Array of available long OIs
+     * @return availableShortOIs Array of available short OIs
+     */
+    function getAllPairsOI()
+        external
+        view
+        returns (
+            string[] memory pairNames,
+            uint256[] memory maxOIPerSides,
+            uint256[] memory currentLongOIs,
+            uint256[] memory currentShortOIs,
+            uint256[] memory availableLongOIs,
+            uint256[] memory availableShortOIs
+        )
+    {
+        uint256 length = allPairs.length;
+        pairNames = new string[](length);
+        maxOIPerSides = new uint256[](length);
+        currentLongOIs = new uint256[](length);
+        currentShortOIs = new uint256[](length);
+        availableLongOIs = new uint256[](length);
+        availableShortOIs = new uint256[](length);
+        
+        uint256 poolValue = getPoolValue();
+        
+        for (uint256 i = 0; i < length; i++) {
+            PairInfo storage info = allPairs[i];
+            PairFunding storage pf = pairFunding[info.name];
+            
+            pairNames[i] = info.name;
+            
+            if (totalOIRatio > 0) {
+                // Calculate max OI based on ratio
+                uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
+                maxOIPerSides[i] = maxAllowedOI / 2;
+            } else {
+                maxOIPerSides[i] = 0;
+            }
+            
+            currentLongOIs[i] = pf.oiLong;
+            currentShortOIs[i] = pf.oiShort;
+            
+            availableLongOIs[i] = maxOIPerSides[i] > pf.oiLong ? maxOIPerSides[i] - pf.oiLong : 0;
+            availableShortOIs[i] = maxOIPerSides[i] > pf.oiShort ? maxOIPerSides[i] - pf.oiShort : 0;
+        }
     }
 }

@@ -142,22 +142,72 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     receive() external payable {}
 
     function _addInitialPairs() internal {
-        // Major Cryptocurrencies with OI ratios, position size limits, and leverage limits
-        // oiRatio: weight for OI distribution (higher = more OI allocation)
+        // Initial trading pairs configuration
+        // Based on database seeder - includes Crypto and Equities
+        // maxOIPercentage in basis points (10000 = 100%)
         // maxPositionSize in USDC (with 6 decimals)
         // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
         
-        // Total ratio will be: 10+5+3+4+2+2+2+2+1 = 31
+        // ============================================================
+        // CRYPTO PAIRS (100x, 75x, 50x, 25x leverage)
+        // ============================================================
         
-        addPairInternal("BTC_USD", 10, 5000e6, 2, 100);    // Ratio weight 10 (highest)
-        addPairInternal("ETH_USD", 5, 3000e6, 2, 100);     // Ratio weight 5
-        addPairInternal("SOL_USD", 3, 2000e6, 2, 75);      // Ratio weight 3
-        addPairInternal("BNB_USD", 4, 2500e6, 2, 75);      // Ratio weight 4
-        addPairInternal("SUI_USD", 2, 1500e6, 2, 50);      // Ratio weight 2
-        addPairInternal("XRP_USD", 2, 1500e6, 2, 50);      // Ratio weight 2
-        addPairInternal("OP_USD", 2, 1000e6, 2, 50);       // Ratio weight 2
-        addPairInternal("ARB_USD", 2, 1000e6, 2, 50);      // Ratio weight 2
-        addPairInternal("DOGE_USD", 1, 800e6, 2, 50);      // Ratio weight 1 (lowest)
+        // 100x Leverage Pairs
+        addPairInternal("BTC_USD", 2000, 5000e6, 2, 100);    // 20% OI, 5000 USDC max
+        addPairInternal("ETH_USD", 1000, 3000e6, 2, 100);    // 10% OI, 3000 USDC max
+        addPairInternal("SOL_USD", 1000, 3000e6, 2, 100);    // 10% OI, 3000 USDC max
+        
+        // 75x Leverage Pairs
+        addPairInternal("BNB_USD", 1000, 2000e6, 2, 75);     // 10% OI, 2000 USDC max
+        addPairInternal("HYPE_USD", 200, 300e6, 2, 75);      // 2% OI, 300 USDC max
+        
+        // 50x Leverage Pairs
+        addPairInternal("MON_USD", 300, 500e6, 2, 50);       // 3% OI, 500 USDC max
+        addPairInternal("XRP_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
+        addPairInternal("SUI_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
+        addPairInternal("OP_USD", 500, 1000e6, 2, 50);       // 5% OI, 1000 USDC max
+        addPairInternal("ARB_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
+        
+        // 25x Leverage Pairs
+        addPairInternal("DOGE_USD", 500, 1000e6, 2, 25);     // 5% OI, 1000 USDC max
+        
+        // ============================================================
+        // EQUITIES PAIRS (25x and 5x leverage)
+        // ============================================================
+        
+        // 25x Leverage Equities
+        addPairInternal("META_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
+        addPairInternal("TSLA_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
+        addPairInternal("MSFT_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
+        addPairInternal("COIN_USD", 800, 1500e6, 2, 25);     // 8% OI, 1500 USDC max
+        addPairInternal("GOOGL_USD", 1000, 2000e6, 2, 25);   // 10% OI, 2000 USDC max
+        addPairInternal("AAPL_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
+        addPairInternal("AMZN_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
+        
+        // 5x Leverage Equities
+        addPairInternal("NVDA_USD", 500, 1000e6, 2, 25);      // 5% OI, 1000 USDC max
+        
+        // ============================================================
+        // INDICES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal("QQQ_USD", 1500, 3000e6, 2, 100);     // 15% OI, 3000 USDC max
+        addPairInternal("SPY_USD", 1500, 3000e6, 2, 100);     // 15% OI, 3000 USDC max
+        
+        // ============================================================
+        // FOREX PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal("EURUSD", 2000, 5000e6, 2, 100);      // 20% OI, 5000 USDC max
+        addPairInternal("GBPUSD", 1500, 3000e6, 2, 100);      // 15% OI, 3000 USDC max
+        addPairInternal("USDJPY", 1500, 3000e6, 2, 100);      // 15% OI, 3000 USDC max
+        
+        // ============================================================
+        // COMMODITIES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal("XAG_USD", 1000, 2000e6, 2, 100);     // 10% OI, 2000 USDC max (Silver)
+        addPairInternal("XAU_USD", 1000, 2000e6, 2, 100);     // 10% OI, 2000 USDC max (Gold)
     }
 
     function addPairInternal(
@@ -543,23 +593,30 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     // ------------------------------------------------------------------
     // MODIFY TP / SL
     // ------------------------------------------------------------------
-
     function modifyTpSl(
+        address user,
         bytes32 positionId,
         uint256 newTP,
         uint256 newSL
-    ) external {
-        Position[] storage userPositions = positions[msg.sender];
+    ) external onlyAuthorizedBackend {
+        Position[] storage userPositions = positions[user];
+        uint256 length = userPositions.length;
 
-        for (uint256 i = 0; i < userPositions.length; i++) {
+        for (uint256 i = 0; i < length; ) {
             Position storage pos = userPositions[i];
 
-            if (pos.id == positionId && !pos.isClosed) {
+            if (pos.id == positionId) {
+                require(!pos.isClosed, "Position already closed");
+                
                 pos.takeProfit = newTP;
                 pos.stopLoss = newSL;
 
-                emit TPSLModified(positionId, msg.sender, newTP, newSL);
+                emit TPSLModified(positionId, user, newTP, newSL);
                 return;
+            }
+
+            unchecked {
+                ++i;
             }
         }
 

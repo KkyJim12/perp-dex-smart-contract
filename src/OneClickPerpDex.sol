@@ -183,14 +183,14 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         // ============================================================
         
         // 25x Leverage Equities
-        addPairInternal("META_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("TSLA_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("NVDA_USD", 500, 50000e6, 2, 5);      // 5% OI, 50000 USDC max, 5x max leverage
-        addPairInternal("MSFT_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("COIN_USD", 800, 50000e6, 2, 25);     // 8% OI, 50000 USDC max
-        addPairInternal("GOOGL_USD", 1000, 50000e6, 2, 25);   // 10% OI, 50000 USDC max
-        addPairInternal("AAPL_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("AMZN_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("META", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("TSLA", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("NVDA", 500, 50000e6, 2, 5);      // 5% OI, 50000 USDC max, 5x max leverage
+        addPairInternal("MSFT", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("COIN", 800, 50000e6, 2, 25);     // 8% OI, 50000 USDC max
+        addPairInternal("GOOGL", 1000, 50000e6, 2, 25);   // 10% OI, 50000 USDC max
+        addPairInternal("AAPL", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("AMZN", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
         
         // ============================================================
         // FOREX PAIRS (100x leverage)
@@ -203,6 +203,13 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         addPairInternal("USDCAD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
         addPairInternal("USDCHF", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
         addPairInternal("NZDUSD", 800, 50000e6, 2, 100);      // 8% OI, 50000 USDC max
+        
+        // ============================================================
+        // INDICES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal("QQQ", 1500, 50000e6, 2, 100);    // 15% OI, 3000 USDC max
+        addPairInternal("SPY", 1500, 50000e6, 2, 100);    // 15% OI, 3000 USDC max
         
         // ============================================================
         // COMMODITIES PAIRS (100x leverage)

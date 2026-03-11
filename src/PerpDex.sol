@@ -362,7 +362,7 @@ contract PerpDEX {
         
         // Equities - 25x Leverage
         addPairInternal(
-            "META_USD",
+            "META",
             0x78a3e3b8e676a8f73c439f5d749737034b139bbbe899ba5775216fba596607fe,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -370,7 +370,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "TSLA_USD",
+            "TSLA",
             0x16dad506d7db8da01c87581c87ca897a012a153557d4d578c3b9c9e1bc0632f1,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -378,7 +378,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "NVDA_USD",
+            "NVDA",
             0xb1073854ed24cbc755dc527418f52b7d271f6cc967bbf8d8129112b18860a593,
             5,         // maxOIPercentage: 500 (5%)
             50000e6,   // 50000 USDC max
@@ -386,7 +386,7 @@ contract PerpDEX {
             5
         );
         addPairInternal(
-            "MSFT_USD",
+            "MSFT",
             0xd0ca23c1cc005e004ccf1db5bf76aeb6a49218f43dac3d4b275e92de12ded4d1,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -394,7 +394,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "COIN_USD",
+            "COIN",
             0xfee33f2a978bf32dd6b662b65ba8083c6773b494f8401194ec1870c640860245,
             8,         // maxOIPercentage: 800 (8%)
             50000e6,   // 50000 USDC max
@@ -402,7 +402,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "GOOGL_USD",
+            "GOOGL",
             0x5a48c03e9b9cb337801073ed9d166817473697efff0d138874e0f6a33d6d5aa6,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -410,7 +410,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "AAPL_USD",
+            "AAPL",
             0x49f6b65cb1de6b10eaf75e7c03ca029c306d0357e91b5311b175084a5ad55688,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -418,7 +418,7 @@ contract PerpDEX {
             25
         );
         addPairInternal(
-            "AMZN_USD",
+            "AMZN",
             0xb5d0e0fa58a1f8b81498ae670ce93c872d14434b72c364885d4fa1b257cbb07a,
             10,        // maxOIPercentage: 1000 (10%)
             50000e6,   // 50000 USDC max
@@ -483,6 +483,27 @@ contract PerpDEX {
             0x92eea8ba1b00078cdc2ef6f64f091f262e8c7d0576ee4677572f314ebfcc9806,
             8,         // maxOIPercentage: 800 (8%)
             50000e6,   // 50000 USDC max
+            2,
+            100
+        );
+        
+        // ============================================================
+        // INDICES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal(
+            "QQQ",
+            0x9695e2b96ea7b3859da9ed25b7a46a920a776e2fdae19a7bcfdf2b219230452d,
+            15,        // maxOIPercentage: 1500 (15%)
+            50000e6,    // 3000 USDC max
+            2,
+            100
+        );
+        addPairInternal(
+            "SPY",
+            0x19e09bb805456ada3979a7d1cbb4b6d63babc3a0f8e8a9509f68afa5c4c11cd5,
+            15,        // maxOIPercentage: 1500 (15%)
+            50000e6,    // 3000 USDC max
             2,
             100
         );

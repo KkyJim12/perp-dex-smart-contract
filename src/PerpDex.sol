@@ -206,99 +206,156 @@ contract PerpDEX {
         // oiRatio: weight for OI distribution (higher = more OI allocation)
         // maxPositionSize in USDC (with 6 decimals)
         // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
+        // maxOIPercentage from seeder (e.g., 2000 = 20%, 1000 = 10%)
         
-        // 100x Leverage Pairs
+        // 100x Leverage Pairs - Crypto
         addPairInternal(
             "BTC_USD",
             0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,
-            10,        // Ratio weight 10
-            5000e6,    // 5000 USDC max
+            20,        // maxOIPercentage: 2000 (20%)
+            50000e6,   // 50000 USDC max
             2,         // Min 2x
             100        // Max 100x
         );
         addPairInternal(
             "ETH_USD",
             0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );
         addPairInternal(
             "SOL_USD",
             0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );
         
-        // 75x Leverage Pairs
+        // 75x Leverage Pairs - Crypto
         addPairInternal(
             "BNB_USD",
             0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f,
-            5,         // Ratio weight 5
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             75
         );
         addPairInternal(
             "HYPE_USD",
             0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b,
-            1,         // Ratio weight 1
-            300e6,     // 300 USDC max
+            2,         // maxOIPercentage: 200 (2%)
+            50000e6,   // 50000 USDC max
             2,
             75
         );
         
-        // 50x Leverage Pairs
+        // 50x Leverage Pairs - Crypto
         addPairInternal(
             "MON_USD",
             0x31491744e2dbf6df7fcf4ac0820d18a609b49076d45066d3568424e62f686cd1,
-            2,         // Ratio weight 2
-            500e6,     // 500 USDC max
+            3,         // maxOIPercentage: 300 (3%)
+            50000e6,   // 50000 USDC max
             2,
             50
         );
         addPairInternal(
             "XRP_USD",
             0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8,
-            3,         // Ratio weight 3
-            1000e6,    // 1000 USDC max
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
             2,
             50
         );
         addPairInternal(
             "SUI_USD",
             0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744,
-            3,         // Ratio weight 3
-            1000e6,    // 1000 USDC max
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
             2,
             50
         );
         addPairInternal(
             "OP_USD",
             0x385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf,
-            3,         // Ratio weight 3
-            1000e6,    // 1000 USDC max
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
             2,
             50
         );
         addPairInternal(
             "ARB_USD",
             0x3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5,
-            3,         // Ratio weight 3
-            1000e6,    // 1000 USDC max
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
+            2,
+            50
+        );
+        addPairInternal(
+            "ZRO_USD",
+            0x3bd860bea28bf982fa06bcf358118064bb114086cc03993bd76197eaab0b8018,
+            2,         // maxOIPercentage: 200 (2%)
+            50000e6,   // 50000 USDC max
+            2,
+            50
+        );
+        addPairInternal(
+            "JUP_USD",
+            0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996,
+            3,         // maxOIPercentage: 300 (3%)
+            50000e6,   // 50000 USDC max
+            2,
+            50
+        );
+        addPairInternal(
+            "LINK_USD",
+            0x8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221,
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
             2,
             50
         );
         
         // 25x Leverage Pairs - Crypto
         addPairInternal(
+            "PYTH_USD",
+            0x0bbf28e9a841a1cc788f6a361b17ca072d0ea3098a1e5df1c3922d06719579ff,
+            3,         // maxOIPercentage: 300 (3%)
+            50000e6,   // 50000 USDC max
+            2,
+            25
+        );
+        addPairInternal(
             "DOGE_USD",
             0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c,
-            3,         // Ratio weight 3
-            1000e6,    // 1000 USDC max
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
+            2,
+            25
+        );
+        addPairInternal(
+            "SHIB_USD",
+            0xf0d57deca57b3da2fe63a493f4c25925fdfd8edf834b20f93e1f84dbd1504d4a,
+            2,         // maxOIPercentage: 200 (2%)
+            50000e6,   // 50000 USDC max
+            2,
+            25
+        );
+        addPairInternal(
+            "BONK_USD",
+            0x72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419,
+            2,         // maxOIPercentage: 200 (2%)
+            50000e6,   // 50000 USDC max
+            2,
+            25
+        );
+        addPairInternal(
+            "PEPE_USD",
+            0xd69731a2e74ac1ce884fc3890f7ee324b6deb66147055249568869ed700882e4,
+            2,         // maxOIPercentage: 200 (2%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
@@ -307,128 +364,125 @@ contract PerpDEX {
         addPairInternal(
             "META_USD",
             0x78a3e3b8e676a8f73c439f5d749737034b139bbbe899ba5775216fba596607fe,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
             "TSLA_USD",
             0x16dad506d7db8da01c87581c87ca897a012a153557d4d578c3b9c9e1bc0632f1,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
+            "NVDA_USD",
+            0xb1073854ed24cbc755dc527418f52b7d271f6cc967bbf8d8129112b18860a593,
+            5,         // maxOIPercentage: 500 (5%)
+            50000e6,   // 50000 USDC max
+            2,
+            5
+        );
+        addPairInternal(
             "MSFT_USD",
             0xd0ca23c1cc005e004ccf1db5bf76aeb6a49218f43dac3d4b275e92de12ded4d1,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
             "COIN_USD",
             0xfee33f2a978bf32dd6b662b65ba8083c6773b494f8401194ec1870c640860245,
-            2,         // Ratio weight 2
-            1500e6,    // 1500 USDC max
+            8,         // maxOIPercentage: 800 (8%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
             "GOOGL_USD",
             0x5a48c03e9b9cb337801073ed9d166817473697efff0d138874e0f6a33d6d5aa6,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
             "AAPL_USD",
             0x49f6b65cb1de6b10eaf75e7c03ca029c306d0357e91b5311b175084a5ad55688,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         addPairInternal(
             "AMZN_USD",
             0xb5d0e0fa58a1f8b81498ae670ce93c872d14434b72c364885d4fa1b257cbb07a,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
             2,
             25
         );
         
-        // Equities - 5x Leverage
-        addPairInternal(
-            "NVDA_USD",
-            0xb1073854ed24cbc755dc527418f52b7d271f6cc967bbf8d8129112b18860a593,
-            2,         // Ratio weight 2
-            1000e6,    // 1000 USDC max
-            2,
-            25
-        );
+        // ============================================================
+        // FOREX PAIRS (100x leverage)
+        // ============================================================
         
-        // Indices - 100x Leverage
-        addPairInternal(
-            "QQQ_USD",
-            0x9695e2b96ea7b3859da9ed25b7a46a920a776e2fdae19a7bcfdf2b219230452d,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
-            2,
-            100
-        );
-        addPairInternal(
-            "SPY_USD",
-            0x19e09bb805456ada3979a7d1cbb4b6d63babc3a0f8e8a9509f68afa5c4c11cd5,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
-            2,
-            100
-        );
-        
-        // Forex - 100x Leverage
         addPairInternal(
             "EURUSD",
             0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b,
-            7,         // Ratio weight 7
-            5000e6,    // 5000 USDC max
+            20,        // maxOIPercentage: 2000 (20%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );
         addPairInternal(
             "GBPUSD",
             0x84c2dde9633d93d1bcad84e7dc41c9d56578b7ec52fabedc1f335d673df0a7c1,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
+            15,        // maxOIPercentage: 1500 (15%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );
         addPairInternal(
             "USDJPY",
             0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52,
-            5,         // Ratio weight 5
-            3000e6,    // 3000 USDC max
-            2,
-            100
-        );
-        
-        // Commodities - 100x Leverage
-        addPairInternal(
-            "XAG_USD",
-            0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            15,        // maxOIPercentage: 1500 (15%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );
         addPairInternal(
-            "XAU_USD",
-            0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2,
-            3,         // Ratio weight 3
-            2000e6,    // 2000 USDC max
+            "AUDUSD",
+            0x67a6f93030420c1c9e3fe37c1ab6b77966af82f995944a9fefce357a22854a80,
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
+            2,
+            100
+        );
+        addPairInternal(
+            "USDCAD",
+            0x3112b03a41c910ed446852aacf67118cb1bec67b2cd0b9a214c58cc0eaa2ecca,
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
+            2,
+            100
+        );
+        addPairInternal(
+            "USDCHF",
+            0x0b1e3297e69f162877b577b0d6a47a0d63b2392bc8499e6540da4187a63e28f8,
+            10,        // maxOIPercentage: 1000 (10%)
+            50000e6,   // 50000 USDC max
+            2,
+            100
+        );
+        addPairInternal(
+            "NZDUSD",
+            0x92eea8ba1b00078cdc2ef6f64f091f262e8c7d0576ee4677572f314ebfcc9806,
+            8,         // maxOIPercentage: 800 (8%)
+            50000e6,   // 50000 USDC max
             2,
             100
         );

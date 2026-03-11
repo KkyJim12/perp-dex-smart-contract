@@ -153,61 +153,56 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         // ============================================================
         
         // 100x Leverage Pairs
-        addPairInternal("BTC_USD", 2000, 5000e6, 2, 100);    // 20% OI, 5000 USDC max
-        addPairInternal("ETH_USD", 1000, 3000e6, 2, 100);    // 10% OI, 3000 USDC max
-        addPairInternal("SOL_USD", 1000, 3000e6, 2, 100);    // 10% OI, 3000 USDC max
+        addPairInternal("BTC_USD", 2000, 50000e6, 2, 100);    // 20% OI, 50000 USDC max
+        addPairInternal("ETH_USD", 1000, 50000e6, 2, 100);    // 10% OI, 50000 USDC max
+        addPairInternal("SOL_USD", 1000, 50000e6, 2, 100);    // 10% OI, 50000 USDC max
         
         // 75x Leverage Pairs
-        addPairInternal("BNB_USD", 1000, 2000e6, 2, 75);     // 10% OI, 2000 USDC max
-        addPairInternal("HYPE_USD", 200, 300e6, 2, 75);      // 2% OI, 300 USDC max
+        addPairInternal("BNB_USD", 1000, 50000e6, 2, 75);     // 10% OI, 50000 USDC max
+        addPairInternal("HYPE_USD", 200, 50000e6, 2, 75);     // 2% OI, 50000 USDC max
         
         // 50x Leverage Pairs
-        addPairInternal("MON_USD", 300, 500e6, 2, 50);       // 3% OI, 500 USDC max
-        addPairInternal("XRP_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
-        addPairInternal("SUI_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
-        addPairInternal("OP_USD", 500, 1000e6, 2, 50);       // 5% OI, 1000 USDC max
-        addPairInternal("ARB_USD", 500, 1000e6, 2, 50);      // 5% OI, 1000 USDC max
+        addPairInternal("MON_USD", 300, 50000e6, 2, 50);      // 3% OI, 50000 USDC max
+        addPairInternal("XRP_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
+        addPairInternal("SUI_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
+        addPairInternal("OP_USD", 500, 50000e6, 2, 50);       // 5% OI, 50000 USDC max
+        addPairInternal("ARB_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
+        addPairInternal("ZRO_USD", 200, 50000e6, 2, 50);      // 2% OI, 50000 USDC max
+        addPairInternal("JUP_USD", 300, 50000e6, 2, 50);      // 3% OI, 50000 USDC max
+        addPairInternal("LINK_USD", 500, 50000e6, 2, 50);     // 5% OI, 50000 USDC max
         
-        // 25x Leverage Pairs
-        addPairInternal("DOGE_USD", 500, 1000e6, 2, 25);     // 5% OI, 1000 USDC max
+        // 25x Leverage Pairs - Crypto
+        addPairInternal("PYTH_USD", 300, 50000e6, 2, 25);     // 3% OI, 50000 USDC max
+        addPairInternal("DOGE_USD", 500, 50000e6, 2, 25);     // 5% OI, 50000 USDC max
+        addPairInternal("SHIB_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
+        addPairInternal("BONK_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
+        addPairInternal("PEPE_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
         
         // ============================================================
         // EQUITIES PAIRS (25x and 5x leverage)
         // ============================================================
         
         // 25x Leverage Equities
-        addPairInternal("META_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
-        addPairInternal("TSLA_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
-        addPairInternal("MSFT_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
-        addPairInternal("COIN_USD", 800, 1500e6, 2, 25);     // 8% OI, 1500 USDC max
-        addPairInternal("GOOGL_USD", 1000, 2000e6, 2, 25);   // 10% OI, 2000 USDC max
-        addPairInternal("AAPL_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
-        addPairInternal("AMZN_USD", 1000, 2000e6, 2, 25);    // 10% OI, 2000 USDC max
-        
-        // 5x Leverage Equities
-        addPairInternal("NVDA_USD", 500, 1000e6, 2, 25);      // 5% OI, 1000 USDC max
-        
-        // ============================================================
-        // INDICES PAIRS (100x leverage)
-        // ============================================================
-        
-        addPairInternal("QQQ_USD", 1500, 3000e6, 2, 100);     // 15% OI, 3000 USDC max
-        addPairInternal("SPY_USD", 1500, 3000e6, 2, 100);     // 15% OI, 3000 USDC max
+        addPairInternal("META_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("TSLA_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("NVDA_USD", 500, 50000e6, 2, 5);      // 5% OI, 50000 USDC max, 5x max leverage
+        addPairInternal("MSFT_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("COIN_USD", 800, 50000e6, 2, 25);     // 8% OI, 50000 USDC max
+        addPairInternal("GOOGL_USD", 1000, 50000e6, 2, 25);   // 10% OI, 50000 USDC max
+        addPairInternal("AAPL_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
+        addPairInternal("AMZN_USD", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
         
         // ============================================================
         // FOREX PAIRS (100x leverage)
         // ============================================================
         
-        addPairInternal("EURUSD", 2000, 5000e6, 2, 100);      // 20% OI, 5000 USDC max
-        addPairInternal("GBPUSD", 1500, 3000e6, 2, 100);      // 15% OI, 3000 USDC max
-        addPairInternal("USDJPY", 1500, 3000e6, 2, 100);      // 15% OI, 3000 USDC max
-        
-        // ============================================================
-        // COMMODITIES PAIRS (100x leverage)
-        // ============================================================
-        
-        addPairInternal("XAG_USD", 1000, 2000e6, 2, 100);     // 10% OI, 2000 USDC max (Silver)
-        addPairInternal("XAU_USD", 1000, 2000e6, 2, 100);     // 10% OI, 2000 USDC max (Gold)
+        addPairInternal("EURUSD", 2000, 50000e6, 2, 100);     // 20% OI, 50000 USDC max
+        addPairInternal("GBPUSD", 1500, 50000e6, 2, 100);     // 15% OI, 50000 USDC max
+        addPairInternal("USDJPY", 1500, 50000e6, 2, 100);     // 15% OI, 50000 USDC max
+        addPairInternal("AUDUSD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
+        addPairInternal("USDCAD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
+        addPairInternal("USDCHF", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
+        addPairInternal("NZDUSD", 800, 50000e6, 2, 100);      // 8% OI, 50000 USDC max
     }
 
     function addPairInternal(

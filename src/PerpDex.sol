@@ -486,6 +486,27 @@ contract PerpDEX {
             2,
             100
         );
+        
+        // ============================================================
+        // COMMODITIES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal(
+            "XAG_USD",
+            0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e,
+            10,        // maxOIPercentage: 1000 (10%)
+            2000e6,    // 2000 USDC max
+            2,
+            100
+        );
+        addPairInternal(
+            "XAU_USD",
+            0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2,
+            10,        // maxOIPercentage: 1000 (10%)
+            2000e6,    // 2000 USDC max
+            2,
+            100
+        );
     }
 
     function addPairInternal(

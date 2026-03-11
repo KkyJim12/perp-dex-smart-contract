@@ -203,6 +203,13 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         addPairInternal("USDCAD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
         addPairInternal("USDCHF", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
         addPairInternal("NZDUSD", 800, 50000e6, 2, 100);      // 8% OI, 50000 USDC max
+        
+        // ============================================================
+        // COMMODITIES PAIRS (100x leverage)
+        // ============================================================
+        
+        addPairInternal("XAG_USD", 1000, 2000e6, 2, 100);    // 10% OI, 2000 USDC max (Silver)
+        addPairInternal("XAU_USD", 1000, 2000e6, 2, 100);    // 10% OI, 2000 USDC max (Gold)
     }
 
     function addPairInternal(

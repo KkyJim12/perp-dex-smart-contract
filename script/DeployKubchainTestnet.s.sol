@@ -5,8 +5,9 @@ import "lib/forge-std/src/Script.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
 import "../src/MockUSDC.sol";
+import "./InitialPairConfig.sol";
 
-contract DeployKubchainTestnet is Script {
+contract DeployKubchainTestnet is Script, InitialPairConfig {
     function run() external returns (address, address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         bool deployMockUSDC = vm.envBool("DEPLOY_MOCK_USDC");
@@ -49,6 +50,7 @@ contract DeployKubchainTestnet is Script {
             usdcAddress,
             address(lpToken)
         );
+        _configureOneClickPerpDex(oneClick);
         console.log("OneClickPerpDex deployed at:");
         console.log(address(oneClick));
 

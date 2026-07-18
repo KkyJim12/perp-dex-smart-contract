@@ -5,8 +5,9 @@ import "lib/forge-std/src/Script.sol";
 import "../src/PerpDex.sol";
 import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
+import "./InitialPairConfig.sol";
 
-contract DeployWithppUSDC is Script {
+contract DeployWithppUSDC is Script, InitialPairConfig {
     function run() external returns (address, address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address pythAddress = vm.envAddress("PYTH_ADDRESS");
@@ -36,6 +37,7 @@ contract DeployWithppUSDC is Script {
 
         // 2. Deploy PerpDex
         PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, address(lpToken));
+        _configurePerpDex(perpDex);
         console.log("PerpDex deployed at:");
         console.log(address(perpDex));
 

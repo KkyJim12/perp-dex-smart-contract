@@ -4,8 +4,9 @@ pragma solidity ^0.8.20;
 import "lib/forge-std/src/Script.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
+import "./InitialPairConfig.sol";
 
-contract DeployOneClick is Script {
+contract DeployOneClick is Script, InitialPairConfig {
     function run() external returns (address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         
@@ -29,6 +30,7 @@ contract DeployOneClick is Script {
             usdcAddress,
             address(lpToken)
         );
+        _configureOneClickPerpDex(oneClick);
         console.log("");
         console.log("OneClickPerpDex deployed at:");
         console.log(address(oneClick));

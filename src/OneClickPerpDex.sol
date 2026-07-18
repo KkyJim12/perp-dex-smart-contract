@@ -30,7 +30,9 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     uint256 public constant SPREAD_BPS = 0;
     uint256 public constant MAX_LEVERAGE = 100;
     uint256 public constant MIN_MARGIN = 1e6; // 1 USDC
-    uint256 public constant MAX_PNL_RATIO = 5e18; // 500%
+    // Profit ratios use 18 decimals: 1e18 = 100% profit on position margin.
+    uint256 public constant DEFAULT_MAX_TP = 5e18; // 500%
+    uint256 public constant MAX_PNL_RATIO = DEFAULT_MAX_TP; // Backwards-compatible alias
 
     struct Position {
         bytes32 id;
@@ -58,6 +60,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 currentShortOI; // Current short open interest for this pair
         uint256 minLeverage; // Minimum leverage allowed (e.g., 2 = 2x)
         uint256 maxLeverage; // Maximum leverage allowed (e.g., 100 = 100x)
+        uint256 maxTP; // Maximum gross profit as a ratio of margin (1e18 = 100%)
     }
 
     mapping(address => Position[]) public positions;
@@ -136,97 +139,30 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         require(_usdc != address(0) && _ocUSDC != address(0), "Invalid address");
         usdc = ERC20(_usdc);
         ocUSDC = IocUSDC(_ocUSDC);
-        _addInitialPairs();
     }
 
     receive() external payable {}
 
-    function _addInitialPairs() internal {
-        // Initial trading pairs configuration
-        // Based on database seeder - includes Crypto and Equities
-        // maxOIPercentage in basis points (10000 = 100%)
-        // maxPositionSize in USDC (with 6 decimals)
-        // minLeverage and maxLeverage (e.g., 2 = 2x, 100 = 100x)
-        
-        // ============================================================
-        // CRYPTO PAIRS (100x, 75x, 50x, 25x leverage)
-        // ============================================================
-        
-        // 100x Leverage Pairs
-        addPairInternal("BTC_USD", 2000, 50000e6, 2, 100);    // 20% OI, 50000 USDC max
-        addPairInternal("ETH_USD", 1000, 50000e6, 2, 100);    // 10% OI, 50000 USDC max
-        addPairInternal("SOL_USD", 1000, 50000e6, 2, 100);    // 10% OI, 50000 USDC max
-        
-        // 75x Leverage Pairs
-        addPairInternal("BNB_USD", 1000, 50000e6, 2, 75);     // 10% OI, 50000 USDC max
-        addPairInternal("HYPE_USD", 200, 50000e6, 2, 75);     // 2% OI, 50000 USDC max
-        
-        // 50x Leverage Pairs
-        addPairInternal("MON_USD", 300, 50000e6, 2, 50);      // 3% OI, 50000 USDC max
-        addPairInternal("XRP_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
-        addPairInternal("SUI_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
-        addPairInternal("OP_USD", 500, 50000e6, 2, 50);       // 5% OI, 50000 USDC max
-        addPairInternal("ARB_USD", 500, 50000e6, 2, 50);      // 5% OI, 50000 USDC max
-        addPairInternal("ZRO_USD", 200, 50000e6, 2, 50);      // 2% OI, 50000 USDC max
-        addPairInternal("JUP_USD", 300, 50000e6, 2, 50);      // 3% OI, 50000 USDC max
-        addPairInternal("LINK_USD", 500, 50000e6, 2, 50);     // 5% OI, 50000 USDC max
-        
-        // 25x Leverage Pairs - Crypto
-        addPairInternal("PYTH_USD", 300, 50000e6, 2, 25);     // 3% OI, 50000 USDC max
-        addPairInternal("DOGE_USD", 500, 50000e6, 2, 25);     // 5% OI, 50000 USDC max
-        addPairInternal("SHIB_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
-        addPairInternal("BONK_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
-        addPairInternal("PEPE_USD", 200, 50000e6, 2, 25);     // 2% OI, 50000 USDC max
-        
-        // ============================================================
-        // EQUITIES PAIRS (25x and 5x leverage)
-        // ============================================================
-        
-        // 25x Leverage Equities
-        addPairInternal("META", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("TSLA", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("NVDA", 500, 50000e6, 2, 5);      // 5% OI, 50000 USDC max, 5x max leverage
-        addPairInternal("MSFT", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("COIN", 800, 50000e6, 2, 25);     // 8% OI, 50000 USDC max
-        addPairInternal("GOOGL", 1000, 50000e6, 2, 25);   // 10% OI, 50000 USDC max
-        addPairInternal("AAPL", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        addPairInternal("AMZN", 1000, 50000e6, 2, 25);    // 10% OI, 50000 USDC max
-        
-        // ============================================================
-        // FOREX PAIRS (100x leverage)
-        // ============================================================
-        
-        addPairInternal("EURUSD", 2000, 50000e6, 2, 100);     // 20% OI, 50000 USDC max
-        addPairInternal("GBPUSD", 1500, 50000e6, 2, 100);     // 15% OI, 50000 USDC max
-        addPairInternal("USDJPY", 1500, 50000e6, 2, 100);     // 15% OI, 50000 USDC max
-        addPairInternal("AUDUSD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
-        addPairInternal("USDCAD", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
-        addPairInternal("USDCHF", 1000, 50000e6, 2, 100);     // 10% OI, 50000 USDC max
-        addPairInternal("NZDUSD", 800, 50000e6, 2, 100);      // 8% OI, 50000 USDC max
-        
-        // ============================================================
-        // INDICES PAIRS (100x leverage)
-        // ============================================================
-        
-        addPairInternal("QQQ", 1500, 50000e6, 2, 100);    // 15% OI, 3000 USDC max
-        addPairInternal("SPY", 1500, 50000e6, 2, 100);    // 15% OI, 3000 USDC max
-        
-        // ============================================================
-        // COMMODITIES PAIRS (100x leverage)
-        // ============================================================
-        
-        addPairInternal("XAG_USD", 1000, 2000e6, 2, 100);    // 10% OI, 2000 USDC max (Silver)
-        addPairInternal("XAU_USD", 1000, 2000e6, 2, 100);    // 10% OI, 2000 USDC max (Gold)
-    }
-
-    function addPairInternal(
+    function _addPair(
         string memory pairs,
         uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
-        uint256 maxLeverage
+        uint256 maxLeverage,
+        uint256 maxTP
     ) internal {
-        pairInfo[pairs] = PairInfo(pairs, true, oiRatio, maxPositionSize, 0, 0, minLeverage, maxLeverage);
+        _validatePairMaxTP(maxTP, maxLeverage);
+        pairInfo[pairs] = PairInfo(
+            pairs,
+            true,
+            oiRatio,
+            maxPositionSize,
+            0,
+            0,
+            minLeverage,
+            maxLeverage,
+            maxTP
+        );
         allPairs.push(pairInfo[pairs]);
         totalOIRatio += oiRatio; // Add to total ratio sum
         emit PairAdded(pairs);
@@ -462,6 +398,67 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         }
     }
 
+    function _validatePairMaxTP(
+        uint256 maxTP,
+        uint256 maxLeverage
+    ) internal pure {
+        require(maxTP > 0, "Invalid maxTP");
+        require(
+            maxTP >= (maxLeverage * ONE) / 1000,
+            "maxTP too low for max leverage"
+        );
+    }
+
+    function _calculateMaxTakeProfitPrice(
+        uint256 entryPrice,
+        uint256 leverage,
+        bool isLong,
+        uint256 maxTP
+    ) internal pure returns (uint256) {
+        uint256 priceDelta = (entryPrice * maxTP) / (ONE * leverage);
+
+        if (isLong) {
+            return entryPrice + priceDelta;
+        }
+
+        return priceDelta >= entryPrice ? 1 : entryPrice - priceDelta;
+    }
+
+    function _resolveAndValidateTakeProfit(
+        PairInfo storage info,
+        bool isLong,
+        uint256 margin,
+        uint256 leverage,
+        uint256 size,
+        uint256 entryPrice,
+        uint256 takeProfit
+    ) internal view returns (uint256 effectiveTP) {
+        effectiveTP = takeProfit == 0
+            ? _calculateMaxTakeProfitPrice(
+                entryPrice,
+                leverage,
+                isLong,
+                info.maxTP
+            )
+            : takeProfit;
+
+        if (isLong) {
+            require(effectiveTP > entryPrice, "Long TP must be above entry price");
+        } else {
+            require(effectiveTP < entryPrice, "Short TP must be below entry price");
+        }
+
+        uint256 priceDifference = isLong
+            ? effectiveTP - entryPrice
+            : entryPrice - effectiveTP;
+        uint256 takeProfitPnl = (size * priceDifference) / entryPrice;
+        uint256 maxPnl = (margin * info.maxTP) / ONE;
+        require(takeProfitPnl <= maxPnl, "TP exceeds pair maxTP");
+
+        uint256 minDistance = entryPrice / 1000;
+        require(priceDifference >= minDistance, "TP too close to entry price");
+    }
+
     // ------------------------------------------------------------------
     // OPEN POSITION (Backend Only)
     // ------------------------------------------------------------------
@@ -490,6 +487,16 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
         // Calculate position size
         uint256 netSize = margin * leverage;
+
+        uint256 effectiveTakeProfit = _resolveAndValidateTakeProfit(
+            info,
+            isLong,
+            margin,
+            leverage,
+            netSize,
+            entryPrice,
+            takeProfit
+        );
         
         // Validate position size limit
         require(netSize <= info.maxPositionSize, "Position size exceeds pair limit");
@@ -536,7 +543,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
             netSize,
             0,
             entryPrice,
-            takeProfit,
+            effectiveTakeProfit,
             stopLoss
         );
     }
@@ -616,11 +623,22 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
             if (pos.id == positionId) {
                 require(!pos.isClosed, "Position already closed");
+
+                PairInfo storage info = pairInfo[pos.pairs];
+                uint256 effectiveNewTP = _resolveAndValidateTakeProfit(
+                    info,
+                    pos.isLong,
+                    pos.margin,
+                    pos.leverage,
+                    pos.size,
+                    pos.entryPrice,
+                    newTP
+                );
                 
-                pos.takeProfit = newTP;
+                pos.takeProfit = effectiveNewTP;
                 pos.stopLoss = newSL;
 
-                emit TPSLModified(positionId, user, newTP, newSL);
+                emit TPSLModified(positionId, user, effectiveNewTP, newSL);
                 return;
             }
 
@@ -807,7 +825,9 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
         int256 cappedPnl = pnl;
         if (cappedPnl > 0) {
-            int256 maxPnl = int256((pos.margin * MAX_PNL_RATIO) / ONE);
+            uint256 pairMaxTP = pairInfo[pos.pairs].maxTP;
+            require(pairMaxTP > 0, "Pair maxTP not configured");
+            int256 maxPnl = int256((pos.margin * pairMaxTP) / ONE);
             if (cappedPnl > maxPnl) cappedPnl = maxPnl;
         }
 
@@ -951,6 +971,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
         require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
+        _validatePairMaxTP(info.maxTP, maxLeverage);
 
         // Update total ratio
         totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
@@ -961,6 +982,34 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         info.maxLeverage = maxLeverage;
 
         emit PairConfigUpdated(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
+    }
+
+    /**
+     * @notice Update a pair's maximum gross profit.
+     * @param maxTP 18-decimal profit-on-margin ratio
+     *              (1e18 = 100%, 5e18 = 500%)
+     */
+    function updatePairMaxTP(
+        string calldata pairs,
+        uint256 maxTP
+    ) external onlyOwner {
+        PairInfo storage info = pairInfo[pairs];
+        require(bytes(info.name).length > 0, "Pair does not exist");
+        _validatePairMaxTP(maxTP, info.maxLeverage);
+
+        info.maxTP = maxTP;
+
+        for (uint256 i = 0; i < allPairs.length; i++) {
+            if (
+                keccak256(bytes(allPairs[i].name)) ==
+                keccak256(bytes(pairs))
+            ) {
+                allPairs[i].maxTP = maxTP;
+                break;
+            }
+        }
+
+        emit PairMaxTPUpdated(pairs, maxTP);
     }
 
     /**
@@ -983,13 +1032,15 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
      * @param maxPositionSize Max position size in USDC
      * @param minLeverage Minimum leverage
      * @param maxLeverage Maximum leverage
+     * @param maxTP Maximum profit ratio (1e18 = 100% of margin)
      */
     function addPair(
         string calldata pairs,
         uint256 oiRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
-        uint256 maxLeverage
+        uint256 maxLeverage,
+        uint256 maxTP
     ) external onlyOwner {
         require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
         require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
@@ -997,7 +1048,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
 
-        addPairInternal(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
+        _addPair(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage, maxTP);
     }
 
     event PairConfigUpdated(
@@ -1007,6 +1058,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 minLeverage,
         uint256 maxLeverage
     );
+    event PairMaxTPUpdated(string pairs, uint256 maxTP);
 
     // ------------------------------------------------------------------
     // HELPERS

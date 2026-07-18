@@ -7,8 +7,9 @@ import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
+import "./InitialPairConfig.sol";
 
-contract DeployAll is Script {
+contract DeployAll is Script, InitialPairConfig {
     function run() external returns (
         address usdcAddress,
         address ppUSDCAddress,
@@ -63,6 +64,7 @@ contract DeployAll is Script {
         console.log("=== Step 3: Deploy Main PerpDex ===");
         PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, ppUSDCAddress);
         perpDexAddress = address(perpDex);
+        _configurePerpDex(perpDex);
         console.log("Main PerpDex deployed at:");
         console.log(perpDexAddress);
         console.log("");
@@ -91,6 +93,7 @@ contract DeployAll is Script {
         console.log("=== Step 6: Deploy OneClick PerpDex ===");
         OneClickPerpDex oneClick = new OneClickPerpDex(usdcAddress, ocUSDCAddress);
         oneClickPerpDexAddress = address(oneClick);
+        _configureOneClickPerpDex(oneClick);
         console.log("OneClick PerpDex deployed at:");
         console.log(oneClickPerpDexAddress);
         console.log("");

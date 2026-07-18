@@ -1,5 +1,25 @@
 # Monad Quick Start Guide
 
+## Initial pair configuration
+
+Trading pairs are not stored in either DEX constructor. Deployment scripts
+load the canonical 37-pair configuration from
+`script/InitialPairConfig.sol` immediately after deployment.
+
+To configure contracts that were deployed separately, set the relevant
+address in `.env` and run:
+
+```bash
+forge script script/ConfigureInitialPairs.s.sol:ConfigurePerpDexPairs \
+    --rpc-url "$RPC_URL" --broadcast
+
+forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs \
+    --rpc-url "$RPC_URL" --broadcast
+```
+
+The signer in `PRIVATE_KEY` must own the target contract. Do not rerun
+configuration against a contract that already contains these pairs.
+
 ## 🚀 Deploy to Monad in 3 Steps
 
 ### **Step 1: Setup Environment**

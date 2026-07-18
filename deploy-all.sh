@@ -41,7 +41,7 @@ echo -e "${GREEN}✓ All required environment variables set${NC}"
 echo ""
 
 # Display deployment info
-echo -e "${BLUE}Network: Monad${NC}"
+echo -e "${BLUE}Network: Avalanche${NC}"
 echo -e "${BLUE}Chain ID: ${CHAIN_ID:-143}${NC}"
 echo -e "${BLUE}RPC URL: $RPC_URL${NC}"
 echo ""
@@ -72,7 +72,6 @@ echo ""
 forge script script/DeployAll.s.sol \
     --rpc-url $RPC_URL \
     --broadcast \
-    --legacy \
     -vvv
 
 # Check if deployment was successful

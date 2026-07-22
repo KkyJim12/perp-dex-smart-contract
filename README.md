@@ -1,5 +1,49 @@
 # Monad Quick Start Guide
 
+## Deploy NativeStaking to Avalanche
+
+Create a local `.env` from `.env.example` and configure either Avalanche Fuji
+(`RPC_URL=https://api.avax-test.network/ext/bc/C/rpc`, `CHAIN_ID=43113`) or
+Avalanche C-Chain mainnet (`RPC_URL=https://api.avax.network/ext/bc/C/rpc`,
+`CHAIN_ID=43114`). Set `PRIVATE_KEY`, and optionally `BACKEND_ADDRESS` for the
+account permitted to take points snapshots.
+
+On macOS/Linux/Git Bash:
+
+```bash
+bash deploy-native-staking.sh
+```
+
+On Windows Command Prompt:
+
+```bat
+deploy-native-staking.bat
+```
+
+Both scripts confirm that the configured chain ID matches the RPC endpoint
+before broadcasting. Pass an alternative environment file as the first argument,
+for example `bash deploy-native-staking.sh .env.avalanche-mainnet`.
+
+## Verify NativeStaking on Snowtrace
+
+After deployment, add the returned address to the same environment file:
+
+```bash
+NATIVE_STAKING_ADDRESS=0x...
+```
+
+The verification scripts select the official Snowtrace API for Fuji (`43113`) or
+C-Chain mainnet (`43114`) automatically. `SNOWTRACE_API_KEY` is optional; the
+Snowtrace free tier accepts the placeholder used by the script.
+
+```bash
+bash verify-native-staking.sh
+```
+
+```bat
+verify-native-staking.bat
+```
+
 ## Initial pair configuration
 
 Trading pairs are not stored in either DEX constructor. Deployment scripts

@@ -9,8 +9,13 @@ import {ppUSDC} from "../src/ppUSDC.sol";
 
 contract MaxTPMockPyth {
     PythStructs.Price internal currentPrice;
+    uint256 public updateCallCount;
 
     function setPrice(uint256 price) external {
+        _setPrice(price);
+    }
+
+    function _setPrice(uint256 price) internal {
         currentPrice = PythStructs.Price({
             price: int64(int256(price)),
             conf: 0,
@@ -25,7 +30,13 @@ contract MaxTPMockPyth {
         return 0;
     }
 
-    function updatePriceFeeds(bytes[] calldata) external payable {}
+    // Test-only update format: the first payload is abi.encode(uint256 price).
+    function updatePriceFeeds(bytes[] calldata updateData) external payable {
+        ++updateCallCount;
+        if (updateData.length > 0) {
+            _setPrice(abi.decode(updateData[0], (uint256)));
+        }
+    }
 
     function getPrice(
         bytes32
@@ -137,7 +148,7 @@ contract PerpDexTest is Test {
 
         vm.prank(trader);
         vm.expectRevert("TP exceeds pair maxTP");
-        perpDex.modifyTpSl(positionId, 56_000e8, 0);
+        perpDex.modifyTpSl(positionId, 56_000e8, 0, new bytes[](0));
     }
 
     function testModifyZeroTPResetsToPairMaxTP() public {
@@ -147,7 +158,7 @@ contract PerpDexTest is Test {
         (bytes32 positionId, , ) = _positionData(0);
 
         vm.prank(trader);
-        perpDex.modifyTpSl(positionId, 0, 0);
+        perpDex.modifyTpSl(positionId, 0, 0, new bytes[](0));
 
         (, , uint256 takeProfit) = _positionData(0);
         assertEq(takeProfit, 60_000e8);
@@ -253,7 +264,7 @@ contract PerpDexTest is Test {
 
         // The stored Pyth price is 50,000, so both levels are valid.
         vm.prank(trader);
-        perpDex.modifyTpSl(positionId, 55_000e8, 45_000e8);
+        perpDex.modifyTpSl(positionId, 55_000e8, 45_000e8, new bytes[](0));
 
         (, , uint256 takeProfit) = _positionData(0);
         assertEq(takeProfit, 55_000e8);
@@ -265,7 +276,22 @@ contract PerpDexTest is Test {
 
         vm.prank(trader);
         vm.expectRevert("Long TP must be above current price");
-        perpDex.modifyTpSl(positionId, 49_000e8, 0);
+        perpDex.modifyTpSl(positionId, 49_000e8, 0, new bytes[](0));
+    }
+
+    function testTpSlEditValidatesAgainstFrontendPythUpdate() public {
+        _openLong(0);
+        (bytes32 positionId, , ) = _positionData(0);
+
+        bytes[] memory priceUpdateData = new bytes[](1);
+        // The mock accepts abi.encode(price) as a price-feed update. A 52,000
+        // TP would be valid against the previously stored 50,000 price, but
+        // must fail after this frontend-supplied update moves it to 55,000.
+        priceUpdateData[0] = abi.encode(55_000e8);
+
+        vm.prank(trader);
+        vm.expectRevert("Long TP must be above current price");
+        perpDex.modifyTpSl(positionId, 52_000e8, 0, priceUpdateData);
     }
 
     function _openLong(uint256 takeProfit) internal {

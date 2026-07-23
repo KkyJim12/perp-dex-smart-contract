@@ -978,16 +978,21 @@ contract PerpDEX {
     function modifyTpSl(
         bytes32 positionId,
         uint256 newTP,
-        uint256 newSL
-    ) external {
+        uint256 newSL,
+        bytes[] calldata priceUpdateData
+    ) external payable {
         Position[] storage userPositions = positions[msg.sender];
 
         for (uint256 i = 0; i < userPositions.length; i++) {
             Position storage pos = userPositions[i];
 
             if (pos.id == positionId && !pos.isClosed) {
-                // Get current price to validate TP/SL levels
-                PythStructs.Price memory priceData = pyth.getPrice(pos.pythTokenId);
+                // Update the feed with frontend-supplied Pyth data, then use
+                // the resulting fresh price to validate the new TP/SL levels.
+                PythStructs.Price memory priceData = _updateAndGetPythPrice(
+                    priceUpdateData,
+                    pos.pythTokenId
+                );
                 require(priceData.price > 0, "Invalid oracle price");
                 uint256 currentPrice = toUint(priceData.price);
 

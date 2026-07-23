@@ -82,9 +82,11 @@ after resolving the incident.
 The owner can use `setPairPaused(pair, true)` or `pauseAllPairs()` to freeze a
 specific market or every market. A paused pair rejects opens, closes, TP/SL
 triggers, and liquidations. TP/SL edits remain available, but their new levels
-must be on the correct side of the current price. `PerpDEX` reads Pyth's stored
-price; `OneClickPerpDex` requires its authorized backend to provide the current
-price as the final argument to `modifyTpSl`.
+must be on the correct side of the current price. `PerpDEX.modifyTpSl` receives
+Pyth price-update data from the frontend, pays the required Pyth update fee,
+and validates the edit against the updated feed price. `OneClickPerpDex`
+requires its authorized backend to provide the current price as the final
+argument to `modifyTpSl`.
 
 ## Direct deployment
 

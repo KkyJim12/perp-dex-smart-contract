@@ -20,12 +20,12 @@ contract ProtocolProxy {
         _;
     }
 
-    constructor(address implementation, address admin, bytes memory initData) payable {
+    constructor(address initialImplementation, address admin, bytes memory initData) payable {
         require(admin != address(0), "Invalid admin");
-        _setImplementation(implementation);
+        _setImplementation(initialImplementation);
         _setAdmin(admin);
         if (initData.length > 0) {
-            (bool success, bytes memory reason) = implementation.delegatecall(initData);
+            (bool success, bytes memory reason) = initialImplementation.delegatecall(initData);
             if (!success) _revertWith(reason);
         }
     }

@@ -79,7 +79,7 @@ contract DeployAll is Script, InitialPairConfig {
             ppUSDCAddress
         );
         PerpDEX perpDex = PerpDEX(
-            address(
+            payable(address(
                 new ProtocolProxy(
                     address(perpDexImplementation),
                     deployer,
@@ -88,7 +88,7 @@ contract DeployAll is Script, InitialPairConfig {
                         (usdcAddress, pythAddress, ppUSDCAddress, deployer)
                     )
                 )
-            )
+            ))
         );
         perpDexAddress = address(perpDex);
         _configurePerpDex(perpDex);
@@ -132,7 +132,7 @@ contract DeployAll is Script, InitialPairConfig {
             ocUSDCAddress
         );
         OneClickPerpDex oneClick = OneClickPerpDex(
-            address(
+            payable(address(
                 new ProtocolProxy(
                     address(oneClickImplementation),
                     deployer,
@@ -141,7 +141,7 @@ contract DeployAll is Script, InitialPairConfig {
                         (usdcAddress, ocUSDCAddress, deployer)
                     )
                 )
-            )
+            ))
         );
         oneClickPerpDexAddress = address(oneClick);
         _configureOneClickPerpDex(oneClick);

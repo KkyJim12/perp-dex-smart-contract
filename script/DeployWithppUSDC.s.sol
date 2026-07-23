@@ -53,7 +53,7 @@ contract DeployWithppUSDC is Script, InitialPairConfig {
             address(lpToken)
         );
         PerpDEX perpDex = PerpDEX(
-            address(
+            payable(address(
                 new ProtocolProxy(
                     address(perpDexImplementation),
                     deployer,
@@ -62,7 +62,7 @@ contract DeployWithppUSDC is Script, InitialPairConfig {
                         (usdcAddress, pythAddress, address(lpToken), deployer)
                     )
                 )
-            )
+            ))
         );
         _configurePerpDex(perpDex);
         console.log("PerpDex deployed at:");

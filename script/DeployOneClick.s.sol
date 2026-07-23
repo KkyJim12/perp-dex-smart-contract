@@ -42,7 +42,7 @@ contract DeployOneClick is Script, InitialPairConfig {
             address(lpToken)
         );
         OneClickPerpDex oneClick = OneClickPerpDex(
-            address(
+            payable(address(
                 new ProtocolProxy(
                     address(oneClickImplementation),
                     deployer,
@@ -51,7 +51,7 @@ contract DeployOneClick is Script, InitialPairConfig {
                         (usdcAddress, address(lpToken), deployer)
                     )
                 )
-            )
+            ))
         );
         _configureOneClickPerpDex(oneClick);
         console.log("");

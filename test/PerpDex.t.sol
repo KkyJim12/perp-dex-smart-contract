@@ -169,6 +169,97 @@ contract PerpDexTest is Test {
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
     }
 
+    function testWorstCaseProfitCapLimitsExposureToThirtyPercentOfPool() public {
+        (PerpDEX limitedDex, ) = _deployLimitedDex(1_000e6);
+
+        // At a 500% max TP, 100 USDC margin reserves 500 USDC of LP loss.
+        // The 1,000 USDC pool only permits 300 USDC of worst-case loss.
+        vm.prank(trader);
+        vm.expectRevert("Exceeds 30% worst-case loss limit");
+        limitedDex.openPosition(
+            "BTC_USD",
+            true,
+            100e6,
+            2,
+            new bytes[](0),
+            0,
+            0
+        );
+    }
+
+    function testTpCloseAtThirtyPercentDrawdownPausesNewTrading() public {
+        (PerpDEX limitedDex, ) = _deployLimitedDex(1_000e6);
+
+        vm.prank(trader);
+        limitedDex.openPosition(
+            "BTC_USD",
+            true,
+            60e6,
+            2,
+            new bytes[](0),
+            0,
+            0
+        );
+
+        (bytes32 positionId, , ) = _positionDataFor(limitedDex, 0);
+        // 5x margin profit at 2x leverage: 50,000 -> 175,000.
+        mockPyth.setPrice(175_000e8);
+        vm.prank(trader);
+        limitedDex.closePosition(positionId, new bytes[](0));
+
+        assertTrue(limitedDex.tradingPaused());
+        assertTrue(limitedDex.pairPaused("BTC_USD"));
+        assertEq(limitedDex.getPoolValue(), 700e6);
+
+        vm.prank(trader);
+        vm.expectRevert("Trading paused");
+        limitedDex.openPosition(
+            "BTC_USD",
+            true,
+            1e6,
+            2,
+            new bytes[](0),
+            0,
+            0
+        );
+    }
+
+    function testDailySnapshotRequiresOneDayAndRefreshesBaseline() public {
+        vm.expectRevert("Snapshot not due");
+        perpDex.snapshotLiquidityPool();
+
+        vm.warp(block.timestamp + 1 days);
+        uint256 snapshot = perpDex.snapshotLiquidityPool();
+        assertEq(snapshot, perpDex.getPoolValue());
+        assertEq(perpDex.latestLiquiditySnapshot(), snapshot);
+    }
+
+    function testPausedPairBlocksCloseButAllowsPriceValidatedTpSlEdit() public {
+        _openLong(0);
+        (bytes32 positionId, , ) = _positionData(0);
+        perpDex.setPairPaused("BTC_USD", true);
+
+        vm.prank(trader);
+        vm.expectRevert("Pair paused");
+        perpDex.closePosition(positionId, new bytes[](0));
+
+        // The stored Pyth price is 50,000, so both levels are valid.
+        vm.prank(trader);
+        perpDex.modifyTpSl(positionId, 55_000e8, 45_000e8);
+
+        (, , uint256 takeProfit) = _positionData(0);
+        assertEq(takeProfit, 55_000e8);
+    }
+
+    function testTpSlEditRejectsLevelOnWrongSideOfCurrentPrice() public {
+        _openLong(0);
+        (bytes32 positionId, , ) = _positionData(0);
+
+        vm.prank(trader);
+        vm.expectRevert("Long TP must be above current price");
+        perpDex.modifyTpSl(positionId, 49_000e8, 0);
+    }
+
     function _openLong(uint256 takeProfit) internal {
         bytes[] memory updateData = new bytes[](0);
         vm.prank(trader);
@@ -218,5 +309,58 @@ contract PerpDexTest is Test {
             takeProfit,
 
         ) = perpDex.positions(trader, index);
+    }
+
+    function _deployLimitedDex(
+        uint256 liquidity
+    ) internal returns (PerpDEX limitedDex, ppUSDC limitedLp) {
+        limitedLp = new ppUSDC();
+        limitedDex = new PerpDEX(
+            address(usdc),
+            address(mockPyth),
+            address(limitedLp)
+        );
+        limitedDex.addPair(
+            "BTC_USD",
+            bytes32(uint256(1)),
+            20,
+            50_000e6,
+            2,
+            100,
+            5e18
+        );
+        limitedLp.setMinter(address(limitedDex), true);
+
+        usdc.mint(address(this), liquidity);
+        usdc.approve(address(limitedDex), liquidity);
+        limitedDex.depositLP(liquidity);
+
+        usdc.mint(trader, 1_000e6);
+        vm.prank(trader);
+        usdc.approve(address(limitedDex), type(uint256).max);
+    }
+
+    function _positionDataFor(
+        PerpDEX dex,
+        uint256 index
+    ) internal view returns (bytes32 id, uint256 payout, uint256 takeProfit) {
+        (
+            id,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            payout,
+            ,
+            ,
+            ,
+            takeProfit,
+
+        ) = dex.positions(trader, index);
     }
 }

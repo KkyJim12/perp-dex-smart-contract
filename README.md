@@ -64,6 +64,28 @@ forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs \
 The signer in `PRIVATE_KEY` must own the target contract. Do not rerun
 configuration against a contract that already contains these pairs.
 
+## LP risk circuit breaker
+
+Both `PerpDEX` and `OneClickPerpDex` reserve the maximum possible profit for
+every open position (`margin * pair.maxTP`). New positions are rejected once
+the aggregate reserved profit would exceed 30% of the current LP pool. At the
+default 500% max TP, each 1 USDC of margin therefore reserves 5 USDC.
+
+The first LP deposit records the initial liquidity baseline. A permissionless
+keeper can call `snapshotLiquidityPool()` once every 24 hours; it compares the
+current pool to the previous snapshot and records a new one. `checkDrawdown()`
+is also permissionless and can be called more often by the bot. A 30% or
+greater drawdown sets `tradingPaused` immediately and pauses every pair. The
+owner must explicitly unpause the required pairs and call `resumeTrading()`
+after resolving the incident.
+
+The owner can use `setPairPaused(pair, true)` or `pauseAllPairs()` to freeze a
+specific market or every market. A paused pair rejects opens, closes, TP/SL
+triggers, and liquidations. TP/SL edits remain available, but their new levels
+must be on the correct side of the current price. `PerpDEX` reads Pyth's stored
+price; `OneClickPerpDex` requires its authorized backend to provide the current
+price as the final argument to `modifyTpSl`.
+
 ## 🚀 Deploy to Monad in 3 Steps
 
 ### **Step 1: Setup Environment**

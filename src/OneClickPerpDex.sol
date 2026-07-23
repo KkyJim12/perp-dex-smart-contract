@@ -67,12 +67,24 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     mapping(address => string) public username;
     mapping(string => address) public usernameTaken;
     mapping(string => PairInfo) public pairInfo;
+    mapping(string => bool) public pairPaused;
 
     PairInfo[] public allPairs;
     address[] public allUsers;
 
     uint256 public totalOpenMargin;
     uint256 public totalOIRatio; // Sum of all pair OI ratios
+
+    // Maximum aggregate trader profit if every open position reaches its
+    // configured pair maxTP. This, rather than raw notional OI, is LP risk.
+    uint256 public totalWorstCaseProfit;
+    mapping(bytes32 => uint256) public positionWorstCaseProfit;
+
+    uint256 public constant MAX_DRAWDOWN_BPS = 3_000; // 30%
+    uint256 public constant BPS = 10_000;
+    bool public tradingPaused;
+    uint256 public latestLiquiditySnapshot;
+    uint256 public lastLiquiditySnapshotTimestamp;
 
     // User fund management (internal balance)
     mapping(address => uint256) public userBalances;
@@ -120,6 +132,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     event RegisterUser(address indexed userAddress, string username);
     event PairAdded(string name);
     event PairStatus(string name, bool active);
+    event PairPaused(string name, bool paused);
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
     event TPSLModified(bytes32 indexed positionId, address indexed user, uint256 newTakeProfit, uint256 newStopLoss);
     event FeeCollected(bytes32 indexed positionId, address indexed user, uint256 feeAmount);
@@ -129,9 +142,17 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
     event SecondaryVaultWithdraw(address indexed user, uint256 amount, uint256 shares);
     event VaultBackupUsed(uint256 amount, uint256 timestamp);
     event BackendAuthorized(address indexed backend, bool authorized);
+    event LiquiditySnapshot(uint256 poolValue, uint256 timestamp);
+    event TradingPaused(uint256 poolValue, uint256 drawdownThreshold);
+    event TradingResumed(address indexed admin);
 
     modifier onlyAuthorizedBackend() {
         require(authorizedBackends[msg.sender], "Not authorized backend");
+        _;
+    }
+
+    modifier whenTradingActive() {
+        require(!tradingPaused, "Trading paused");
         _;
     }
 
@@ -276,6 +297,10 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
         ocUSDC.mint(msg.sender, ocUSDCToMint);
 
+        if (latestLiquiditySnapshot == 0) {
+            _recordLiquiditySnapshot(getPoolValue());
+        }
+
         emit LPDeposit(msg.sender, amount, ocUSDCToMint);
     }
 
@@ -398,6 +423,92 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         }
     }
 
+    // ------------------------------------------------------------------
+    // RISK CONTROLS
+    // ------------------------------------------------------------------
+
+    /// @notice Permissionless daily snapshot for the keeper bot.
+    function snapshotLiquidityPool() external returns (uint256 poolValue) {
+        require(
+            block.timestamp >= lastLiquiditySnapshotTimestamp + 1 days,
+            "Snapshot not due"
+        );
+        poolValue = getPoolValue();
+        _pauseIfDrawdownExceeded(poolValue);
+        _recordLiquiditySnapshot(poolValue);
+    }
+
+    /// @notice Allows any caller to trip the drawdown circuit breaker early.
+    function checkDrawdown() external returns (bool) {
+        _pauseIfDrawdownExceeded(getPoolValue());
+        return tradingPaused;
+    }
+
+    function resumeTrading() external onlyOwner {
+        require(tradingPaused, "Trading active");
+        tradingPaused = false;
+        emit TradingResumed(msg.sender);
+    }
+
+    function getDrawdownThreshold() public view returns (uint256) {
+        return (latestLiquiditySnapshot * (BPS - MAX_DRAWDOWN_BPS)) / BPS;
+    }
+
+    function getMaxWorstCaseProfit() public view returns (uint256) {
+        return (getPoolValue() * MAX_DRAWDOWN_BPS) / BPS;
+    }
+
+    function _recordLiquiditySnapshot(uint256 poolValue) internal {
+        latestLiquiditySnapshot = poolValue;
+        lastLiquiditySnapshotTimestamp = block.timestamp;
+        emit LiquiditySnapshot(poolValue, block.timestamp);
+    }
+
+    function _pauseIfDrawdownExceeded(uint256 poolValue) internal {
+        uint256 snapshot = latestLiquiditySnapshot;
+        if (!tradingPaused && snapshot > 0 && poolValue <= getDrawdownThreshold()) {
+            tradingPaused = true;
+            _pauseAllPairs();
+            emit TradingPaused(poolValue, getDrawdownThreshold());
+        }
+    }
+
+    function _pauseAllPairs() internal {
+        for (uint256 i = 0; i < allPairs.length; i++) {
+            string memory pairs = allPairs[i].name;
+            if (!pairPaused[pairs]) {
+                pairPaused[pairs] = true;
+                emit PairPaused(pairs, true);
+            }
+        }
+    }
+
+    function _validateWorstCaseProfit(uint256 margin, uint256 maxTP) internal view {
+        uint256 additionalExposure = (margin * maxTP) / ONE;
+        require(
+            totalWorstCaseProfit + additionalExposure <= getMaxWorstCaseProfit(),
+            "Exceeds 30% worst-case loss limit"
+        );
+    }
+
+    function _reserveWorstCaseProfit(
+        bytes32 positionId,
+        uint256 margin,
+        uint256 maxTP
+    ) internal {
+        uint256 exposure = (margin * maxTP) / ONE;
+        positionWorstCaseProfit[positionId] = exposure;
+        totalWorstCaseProfit += exposure;
+    }
+
+    function _releaseWorstCaseProfit(bytes32 positionId) internal {
+        uint256 exposure = positionWorstCaseProfit[positionId];
+        if (exposure > 0) {
+            totalWorstCaseProfit -= exposure;
+            delete positionWorstCaseProfit[positionId];
+        }
+    }
+
     function _validatePairMaxTP(
         uint256 maxTP,
         uint256 maxLeverage
@@ -472,7 +583,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 entryPrice,
         uint256 takeProfit,
         uint256 stopLoss
-    ) external onlyAuthorizedBackend nonReentrant {
+    ) external onlyAuthorizedBackend nonReentrant whenTradingActive {
         require(margin > 0 && leverage > 0, "Invalid margin or leverage");
         require(margin >= MIN_MARGIN, "Margin too small");
         require(leverage <= MAX_LEVERAGE, "Leverage too high");
@@ -480,6 +591,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         
         PairInfo storage info = pairInfo[pairs];
         require(info.active, "Pair not active");
+        require(!pairPaused[pairs], "Pair paused");
 
         // Validate leverage limits for this pair
         require(leverage >= info.minLeverage, "Leverage below pair minimum");
@@ -505,6 +617,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 poolValue = getPoolValue();
         require(poolValue > 0, "Pool is empty");
         require(totalOIRatio > 0, "No pairs configured");
+        _validateWorstCaseProfit(margin, info.maxTP);
         
         // Calculate max OI for this pair based on its ratio
         // Formula: maxOI = (poolValue * pairRatio) / totalRatio
@@ -590,6 +703,8 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
             )
         );
 
+        _reserveWorstCaseProfit(id, netMargin, pairInfo[pairs].maxTP);
+
         emit OpenPosition(
             id,
             user,
@@ -613,8 +728,10 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         address user,
         bytes32 positionId,
         uint256 newTP,
-        uint256 newSL
+        uint256 newSL,
+        uint256 currentPrice
     ) external onlyAuthorizedBackend {
+        require(currentPrice > 0, "Invalid current price");
         Position[] storage userPositions = positions[user];
         uint256 length = userPositions.length;
 
@@ -634,6 +751,46 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
                     pos.entryPrice,
                     newTP
                 );
+
+                // TP/SL must remain on the correct side of the live price.
+                // This prevents a backend from setting an already-triggered
+                // level while a pair is paused or the market is moving.
+                if (pos.isLong) {
+                    require(
+                        effectiveNewTP > currentPrice,
+                        "Long TP must be above current price"
+                    );
+                    if (newSL > 0) {
+                        require(
+                            newSL < currentPrice,
+                            "Long SL must be below current price"
+                        );
+                    }
+                } else {
+                    require(
+                        effectiveNewTP < currentPrice,
+                        "Short TP must be below current price"
+                    );
+                    if (newSL > 0) {
+                        require(
+                            newSL > currentPrice,
+                            "Short SL must be above current price"
+                        );
+                    }
+                }
+
+                uint256 minDistance = currentPrice / 1000;
+                uint256 tpDistance = pos.isLong
+                    ? effectiveNewTP - currentPrice
+                    : currentPrice - effectiveNewTP;
+                require(tpDistance >= minDistance, "TP too close to current price");
+                if (newSL > 0) {
+                    uint256 slDistance = pos.isLong
+                        ? currentPrice - newSL
+                        : newSL - currentPrice;
+                    require(slDistance >= minDistance, "SL too close to current price");
+                    require(effectiveNewTP != newSL, "TP and SL cannot be the same price");
+                }
                 
                 pos.takeProfit = effectiveNewTP;
                 pos.stopLoss = newSL;
@@ -747,6 +904,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
 
             if (!pos.isClosed && pos.id == positionId) {
                 require(price > 0, "Invalid price");
+                require(!pairPaused[pos.pairs], "Pair paused");
 
                 int256 pnl = pos.isLong
                     ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
@@ -801,6 +959,9 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
                 pos.closePrice = price;
                 pos.payout = 0;
 
+                _releaseWorstCaseProfit(pos.id);
+                _pauseIfDrawdownExceeded(getPoolValue());
+
                 emit ClosePosition(pos.id, user, price, 0, 0, "liquidate");
                 return;
             }
@@ -819,15 +980,16 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 price,
         string memory status
     ) internal {
+        require(!pairPaused[pos.pairs], "Pair paused");
         int256 pnl = pos.isLong
             ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
             : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) / int256(pos.entryPrice);
 
         int256 cappedPnl = pnl;
         if (cappedPnl > 0) {
-            uint256 pairMaxTP = pairInfo[pos.pairs].maxTP;
-            require(pairMaxTP > 0, "Pair maxTP not configured");
-            int256 maxPnl = int256((pos.margin * pairMaxTP) / ONE);
+            // Keep the cap fixed to the liability reserved when the position
+            // opened; a later pair maxTP update must not increase LP risk.
+            int256 maxPnl = int256(positionWorstCaseProfit[pos.id]);
             if (cappedPnl > maxPnl) cappedPnl = maxPnl;
         }
 
@@ -906,6 +1068,9 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         pos.closePrice = price;
         pos.payout = payout;
 
+        _releaseWorstCaseProfit(pos.id);
+        _pauseIfDrawdownExceeded(getPoolValue());
+
         emit ClosePosition(pos.id, user, price, payout, closeFee, status);
     }
 
@@ -925,7 +1090,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
             for (uint256 i = 0; i < userPositions.length; i++) {
                 Position storage pos = userPositions[i];
 
-                if (!pos.isClosed) {
+                if (!pos.isClosed && !pairPaused[pos.pairs]) {
                     uint256 price = 0;
 
                     if (keccak256(bytes(pos.pairs)) == keccak256(bytes("BTC_USD"))) {
@@ -1023,6 +1188,18 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         
         info.active = active;
         emit PairStatus(pairs, active);
+    }
+
+    /// @notice Freezes every trading action for one pair except TP/SL edits.
+    function setPairPaused(string calldata pairs, bool paused) external onlyOwner {
+        require(bytes(pairInfo[pairs].name).length > 0, "Pair does not exist");
+        pairPaused[pairs] = paused;
+        emit PairPaused(pairs, paused);
+    }
+
+    /// @notice Owner emergency action to pause every configured market.
+    function pauseAllPairs() external onlyOwner {
+        _pauseAllPairs();
     }
 
     /**

@@ -80,12 +80,24 @@ contract PerpDEX {
     mapping(string => address) public usernameTaken;
     mapping(string => PairFunding) public pairFunding;
     mapping(string => PairInfo) public pairInfo;
+    mapping(string => bool) public pairPaused;
 
     PairInfo[] public allPairs;
     address[] public allUsers;
 
     uint256 public totalOpenMargin;
     uint256 public totalOIRatio; // Sum of all pair OI ratios
+
+    // Sum of every open position's maximum allowed profit. Unlike notional
+    // OI, this is the amount LPs can actually lose if every TP is hit.
+    uint256 public totalWorstCaseProfit;
+    mapping(bytes32 => uint256) public positionWorstCaseProfit;
+
+    uint256 public constant MAX_DRAWDOWN_BPS = 3_000; // 30%
+    uint256 public constant BPS = 10_000;
+    bool public tradingPaused;
+    uint256 public latestLiquiditySnapshot;
+    uint256 public lastLiquiditySnapshotTimestamp;
 
     // Secondary Vault (Fee Vault) - serves as backup for main vault
     uint256 public totalSecondaryShares;
@@ -132,6 +144,7 @@ contract PerpDEX {
     );
     event PairAdded(string name, bytes32 pythTokenId);
     event PairStatus(string name, bool active);
+    event PairPaused(string name, bool paused);
     event OwnershipTransferred(
         address indexed oldOwner,
         address indexed newOwner
@@ -187,6 +200,9 @@ contract PerpDEX {
         uint256 payout,
         string reason
     );
+    event LiquiditySnapshot(uint256 poolValue, uint256 timestamp);
+    event TradingPaused(uint256 poolValue, uint256 drawdownThreshold);
+    event TradingResumed(address indexed admin);
 
     constructor(address _usdc, address _pyth, address _ppUSDC) {
         require(
@@ -201,6 +217,11 @@ contract PerpDEX {
     }
 
     receive() external payable {}
+
+    modifier whenTradingActive() {
+        require(!tradingPaused, "Trading paused");
+        _;
+    }
 
     function _addPair(
         string memory pairs,
@@ -427,6 +448,12 @@ contract PerpDEX {
         // Mint ppUSDC tokens to user
         ppUSDC.mint(msg.sender, ppUSDCToMint);
 
+        // Set a baseline when the pool first receives liquidity. Subsequent
+        // snapshots are intentionally keeper-triggered once per day.
+        if (latestLiquiditySnapshot == 0) {
+            _recordLiquiditySnapshot(getPoolValue());
+        }
+
         // Calculate user's new percentage
         uint256 newTotalSupply = ppUSDC.totalSupply();
         uint256 userPercentage = (ppUSDCToMint * 10000) / newTotalSupply;
@@ -599,6 +626,92 @@ contract PerpDEX {
     }
 
     // ------------------------------------------------------------------
+    // RISK CONTROLS
+    // ------------------------------------------------------------------
+
+    /// @notice Permissionless daily snapshot for the keeper bot.
+    function snapshotLiquidityPool() external returns (uint256 poolValue) {
+        require(
+            block.timestamp >= lastLiquiditySnapshotTimestamp + 1 days,
+            "Snapshot not due"
+        );
+        poolValue = getPoolValue();
+        _pauseIfDrawdownExceeded(poolValue);
+        _recordLiquiditySnapshot(poolValue);
+    }
+
+    /// @notice Allows any caller to trip the drawdown circuit breaker early.
+    function checkDrawdown() external returns (bool) {
+        _pauseIfDrawdownExceeded(getPoolValue());
+        return tradingPaused;
+    }
+
+    function resumeTrading() external onlyOwner {
+        require(tradingPaused, "Trading active");
+        tradingPaused = false;
+        emit TradingResumed(msg.sender);
+    }
+
+    function getDrawdownThreshold() public view returns (uint256) {
+        return (latestLiquiditySnapshot * (BPS - MAX_DRAWDOWN_BPS)) / BPS;
+    }
+
+    function getMaxWorstCaseProfit() public view returns (uint256) {
+        return (getPoolValue() * MAX_DRAWDOWN_BPS) / BPS;
+    }
+
+    function _recordLiquiditySnapshot(uint256 poolValue) internal {
+        latestLiquiditySnapshot = poolValue;
+        lastLiquiditySnapshotTimestamp = block.timestamp;
+        emit LiquiditySnapshot(poolValue, block.timestamp);
+    }
+
+    function _pauseIfDrawdownExceeded(uint256 poolValue) internal {
+        uint256 snapshot = latestLiquiditySnapshot;
+        if (!tradingPaused && snapshot > 0 && poolValue <= getDrawdownThreshold()) {
+            tradingPaused = true;
+            _pauseAllPairs();
+            emit TradingPaused(poolValue, getDrawdownThreshold());
+        }
+    }
+
+    function _pauseAllPairs() internal {
+        for (uint256 i = 0; i < allPairs.length; i++) {
+            string memory pairs = allPairs[i].name;
+            if (!pairPaused[pairs]) {
+                pairPaused[pairs] = true;
+                emit PairPaused(pairs, true);
+            }
+        }
+    }
+
+    function _validateWorstCaseProfit(uint256 margin, uint256 maxTP) internal view {
+        uint256 additionalExposure = (margin * maxTP) / ONE;
+        require(
+            totalWorstCaseProfit + additionalExposure <= getMaxWorstCaseProfit(),
+            "Exceeds 30% worst-case loss limit"
+        );
+    }
+
+    function _reserveWorstCaseProfit(
+        bytes32 positionId,
+        uint256 margin,
+        uint256 maxTP
+    ) internal {
+        uint256 exposure = (margin * maxTP) / ONE;
+        positionWorstCaseProfit[positionId] = exposure;
+        totalWorstCaseProfit += exposure;
+    }
+
+    function _releaseWorstCaseProfit(bytes32 positionId) internal {
+        uint256 exposure = positionWorstCaseProfit[positionId];
+        if (exposure > 0) {
+            totalWorstCaseProfit -= exposure;
+            delete positionWorstCaseProfit[positionId];
+        }
+    }
+
+    // ------------------------------------------------------------------
     // FUNDING (DISABLED - SET TO 0)
     // ------------------------------------------------------------------
 
@@ -711,10 +824,11 @@ contract PerpDEX {
         bytes[] calldata priceUpdateData,
         uint256 takeProfit,
         uint256 stopLoss
-    ) external payable {
+    ) external payable whenTradingActive {
         require(margin > 0 && leverage > 0);
         PairInfo storage info = pairInfo[pairs];
         require(info.active);
+        require(!pairPaused[pairs], "Pair paused");
 
         // Validate leverage limits for this pair
         require(leverage >= info.minLeverage, "Leverage below pair minimum");
@@ -730,6 +844,7 @@ contract PerpDEX {
         uint256 poolValue = getPoolValue();
         require(poolValue > 0, "Pool is empty");
         require(totalOIRatio > 0, "No pairs configured");
+        _validateWorstCaseProfit(margin, info.maxTP);
         
         PairFunding storage pf = pairFunding[pairs];
         
@@ -881,6 +996,8 @@ contract PerpDEX {
             )
         );
 
+        _reserveWorstCaseProfit(id, netMargin, pairInfo[pairs].maxTP);
+
         if (isLong) pf.oiLong += netSize;
         else pf.oiShort += netSize;
 
@@ -922,7 +1039,7 @@ contract PerpDEX {
 
             if (pos.id == positionId && !pos.isClosed) {
                 // Get current price to validate TP/SL levels
-                PythStructs.Price memory priceData = pyth.getPriceUnsafe(pos.pythTokenId);
+                PythStructs.Price memory priceData = pyth.getPrice(pos.pythTokenId);
                 require(priceData.price > 0, "Invalid oracle price");
                 uint256 currentPrice = toUint(priceData.price);
 
@@ -1012,6 +1129,7 @@ contract PerpDEX {
             Position storage pos = userPositions[i];
 
             if (!pos.isClosed && pos.id == positionId) {
+                require(!pairPaused[pos.pairs], "Pair paused");
                 PythStructs.Price memory token = _updateAndGetPythPrice(
                     priceUpdateData,
                     pos.pythTokenId
@@ -1040,6 +1158,7 @@ contract PerpDEX {
             Position storage pos = userPositions[i];
 
             if (!pos.isClosed && pos.id == positionId) {
+                require(!pairPaused[pos.pairs], "Pair paused");
                 PythStructs.Price memory token = _updateAndGetPythPrice(
                     priceUpdateData,
                     pos.pythTokenId
@@ -1172,6 +1291,7 @@ contract PerpDEX {
                 }
 
                 // Normal liquidation logic
+                require(!pairPaused[pos.pairs], "Pair paused");
                 int256 pnl = pos.isLong
                     ? (int256(pos.size) * (int256(price) - int256(pos.entryPrice))) / int256(pos.entryPrice)
                     : (int256(pos.size) * (int256(pos.entryPrice) - int256(price))) / int256(pos.entryPrice);
@@ -1206,6 +1326,9 @@ contract PerpDEX {
                 pos.closePrice = price;
                 pos.payout = 0; // User gets nothing on liquidation
 
+                _releaseWorstCaseProfit(pos.id);
+                _pauseIfDrawdownExceeded(getPoolValue());
+
                 emit ClosePosition(pos.id, user, price, 0, 0, "liquidate");
                 return;
             }
@@ -1224,6 +1347,7 @@ contract PerpDEX {
         uint256 price,
         string memory status
     ) internal {
+        require(!pairPaused[pos.pairs], "Pair paused");
         _accrueFunding(pos.pairs);
 
         int256 pnl = pos.isLong
@@ -1238,9 +1362,9 @@ contract PerpDEX {
 
         int256 cappedPnl = pnl;
         if (cappedPnl > 0) {
-            uint256 pairMaxTP = pairInfo[pos.pairs].maxTP;
-            require(pairMaxTP > 0, "Pair maxTP not configured");
-            int256 maxPnl = int256((pos.margin * pairMaxTP) / ONE);
+            // Use the liability reserved at open, not the mutable pair
+            // configuration, so later maxTP changes cannot increase LP risk.
+            int256 maxPnl = int256(positionWorstCaseProfit[pos.id]);
             if (cappedPnl > maxPnl) cappedPnl = maxPnl;
         }
 
@@ -1290,6 +1414,9 @@ contract PerpDEX {
         pos.closePrice = price;
         pos.payout = payout;
 
+        _releaseWorstCaseProfit(pos.id);
+        _pauseIfDrawdownExceeded(getPoolValue());
+
         emit ClosePosition(pos.id, user, price, payout, closeFee, status);
     }
 
@@ -1305,7 +1432,7 @@ contract PerpDEX {
             for (uint256 i = 0; i < userPositions.length; i++) {
                 Position storage pos = userPositions[i];
 
-                if (!pos.isClosed) {
+                if (!pos.isClosed && !pairPaused[pos.pairs]) {
                     PythStructs.Price memory token = pyth.getPrice(
                         pos.pythTokenId
                     );
@@ -1399,6 +1526,18 @@ contract PerpDEX {
         
         info.active = active;
         emit PairStatus(pairs, active);
+    }
+
+    /// @notice Freezes every trading action for one pair except TP/SL edits.
+    function setPairPaused(string calldata pairs, bool paused) external onlyOwner {
+        require(bytes(pairInfo[pairs].name).length > 0, "Pair does not exist");
+        pairPaused[pairs] = paused;
+        emit PairPaused(pairs, paused);
+    }
+
+    /// @notice Owner emergency action to pause every configured market.
+    function pauseAllPairs() external onlyOwner {
+        _pauseAllPairs();
     }
 
     /**

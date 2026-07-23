@@ -4,13 +4,11 @@ pragma solidity ^0.8.20;
 import "lib/forge-std/src/Script.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
-import "../src/ProtocolProxy.sol";
 import "./InitialPairConfig.sol";
 
 contract DeployOneClick is Script, InitialPairConfig {
     function run() external returns (address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
         
         // Get USDC address from environment
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
@@ -22,37 +20,13 @@ contract DeployOneClick is Script, InitialPairConfig {
         vm.startBroadcast(deployerPrivateKey);
 
         // 1. Deploy ocUSDC token
-        ocUSDC ocUSDCImplementation = new ocUSDC();
-        ocUSDC lpToken = ocUSDC(
-            address(
-                new ProtocolProxy(
-                    address(ocUSDCImplementation),
-                    deployer,
-                    abi.encodeCall(ocUSDC.initialize, (deployer))
-                )
-            )
-        );
+        ocUSDC lpToken = new ocUSDC();
         console.log("");
         console.log("ocUSDC deployed at:");
         console.log(address(lpToken));
 
         // 2. Deploy OneClickPerpDex
-        OneClickPerpDex oneClickImplementation = new OneClickPerpDex(
-            usdcAddress,
-            address(lpToken)
-        );
-        OneClickPerpDex oneClick = OneClickPerpDex(
-            payable(address(
-                new ProtocolProxy(
-                    address(oneClickImplementation),
-                    deployer,
-                    abi.encodeCall(
-                        OneClickPerpDex.initialize,
-                        (usdcAddress, address(lpToken), deployer)
-                    )
-                )
-            ))
-        );
+        OneClickPerpDex oneClick = new OneClickPerpDex(usdcAddress, address(lpToken));
         _configureOneClickPerpDex(oneClick);
         console.log("");
         console.log("OneClickPerpDex deployed at:");

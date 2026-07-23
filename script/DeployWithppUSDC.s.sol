@@ -5,13 +5,11 @@ import "lib/forge-std/src/Script.sol";
 import "../src/PerpDex.sol";
 import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
-import "../src/ProtocolProxy.sol";
 import "./InitialPairConfig.sol";
 
 contract DeployWithppUSDC is Script, InitialPairConfig {
     function run() external returns (address, address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
         address pythAddress = vm.envAddress("PYTH_ADDRESS");
         
         // Check if we should deploy MockUSDC or use existing USDC
@@ -33,37 +31,12 @@ contract DeployWithppUSDC is Script, InitialPairConfig {
         }
 
         // 1. Deploy ppUSDC token
-        ppUSDC ppUSDCImplementation = new ppUSDC();
-        ppUSDC lpToken = ppUSDC(
-            address(
-                new ProtocolProxy(
-                    address(ppUSDCImplementation),
-                    deployer,
-                    abi.encodeCall(ppUSDC.initialize, (deployer))
-                )
-            )
-        );
+        ppUSDC lpToken = new ppUSDC();
         console.log("ppUSDC deployed at:");
         console.log(address(lpToken));
 
         // 2. Deploy PerpDex
-        PerpDEX perpDexImplementation = new PerpDEX(
-            usdcAddress,
-            pythAddress,
-            address(lpToken)
-        );
-        PerpDEX perpDex = PerpDEX(
-            payable(address(
-                new ProtocolProxy(
-                    address(perpDexImplementation),
-                    deployer,
-                    abi.encodeCall(
-                        PerpDEX.initialize,
-                        (usdcAddress, pythAddress, address(lpToken), deployer)
-                    )
-                )
-            ))
-        );
+        PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, address(lpToken));
         _configurePerpDex(perpDex);
         console.log("PerpDex deployed at:");
         console.log(address(perpDex));

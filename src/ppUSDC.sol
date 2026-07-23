@@ -25,11 +25,7 @@ contract ppUSDC is UpgradeableERC20 {
         _initialize(msg.sender);
     }
 
-    function initialize(address initialOwner) external {
-        _initialize(initialOwner);
-    }
-
-    function _initialize(address initialOwner) internal initializer {
+    function _initialize(address initialOwner) internal {
         require(initialOwner != address(0), "Invalid address");
         __ERC20_init("PerpDex Pool USDC", "ppUSDC");
         owner = initialOwner;

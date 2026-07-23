@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/openzeppelin-contracts/contracts/proxy/utils/Initializable.sol";
 
 interface IppUSDC {
     function mint(address to, uint256 amount) external;
@@ -14,7 +13,7 @@ interface IppUSDC {
     function decimals() external view returns (uint8);
 }
 
-contract PerpDEX is Initializable {
+contract PerpDEX {
     IPyth public pyth;
     ERC20 public usdc;
     IppUSDC public ppUSDC; // LP token
@@ -210,21 +209,12 @@ contract PerpDEX is Initializable {
         _initialize(_usdc, _pyth, _ppUSDC, msg.sender);
     }
 
-    function initialize(
-        address _usdc,
-        address _pyth,
-        address _ppUSDC,
-        address initialOwner
-    ) external {
-        _initialize(_usdc, _pyth, _ppUSDC, initialOwner);
-    }
-
     function _initialize(
         address _usdc,
         address _pyth,
         address _ppUSDC,
         address initialOwner
-    ) internal initializer {
+    ) internal {
         require(
             _usdc != address(0) && _pyth != address(0) && _ppUSDC != address(0),
             "Invalid address"

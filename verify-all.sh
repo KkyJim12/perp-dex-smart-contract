@@ -117,7 +117,7 @@ verify_contract() {
         --verifier custom
         --verifier-url "$VERIFIER_URL"
         --verifier-api-key "$VERIFIER_API_KEY"
-        --num-of-optimizations 200
+        --num-of-optimizations 1
         --via-ir
         --watch
     )

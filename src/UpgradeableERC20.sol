@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "lib/openzeppelin-contracts/contracts/proxy/utils/Initializable.sol";
-
-abstract contract UpgradeableERC20 is Initializable {
+abstract contract UpgradeableERC20 {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
     uint256 private _totalSupply;
@@ -13,7 +11,7 @@ abstract contract UpgradeableERC20 is Initializable {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
-    function __ERC20_init(string memory name_, string memory symbol_) internal onlyInitializing {
+    function __ERC20_init(string memory name_, string memory symbol_) internal {
         _name = name_;
         _symbol = symbol_;
     }

@@ -34,4 +34,9 @@ contract ppUSDC is ERC20, Ownable {
     function burn(address from, uint256 amount) external onlyMinter {
         _burn(from, amount);
     }
+
+    /// @notice Match the 6-decimal USDC collateral used by the pool.
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
 }

@@ -103,6 +103,15 @@ contract PerpDexTest is Test {
         assertEq(names.length, 0);
     }
 
+    function testInitialLpDepositMintsSameDisplayedTokenAmount() public {
+        // USDC and ppUSDC are both 6 decimals, so the initial deposit mints
+        // the identical displayed number of LP tokens.
+        assertEq(lpToken.decimals(), 6);
+        assertEq(lpToken.balanceOf(address(this)), 100_000_000e6);
+        assertEq(perpDex.calculateDepositShares(10_000e6), 10_000e6);
+        assertEq(perpDex.getppUSDCPrice(), 1e18);
+    }
+
     function testOpenRejectsTPAbovePairMaxTP() public {
         perpDex.updatePairMaxTP("BTC_USD", 1e18); // 100% of margin
 

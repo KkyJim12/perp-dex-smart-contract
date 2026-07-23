@@ -10,6 +10,7 @@ interface IppUSDC {
     function burn(address from, uint256 amount) external;
     function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
+    function decimals() external view returns (uint8);
 }
 
 contract PerpDEX {
@@ -312,7 +313,10 @@ contract PerpDEX {
         uint256 poolValue = getPoolValue();
         if (poolValue == 0) return 0; // Pool is empty
         
-        return (poolValue * ONE) / totalSupply;
+        // Return a WAD price independent of collateral and LP-token decimals.
+        return
+            (poolValue * (10 ** ppUSDC.decimals()) * ONE) /
+            (totalSupply * (10 ** usdc.decimals()));
     }
 
     // Helper function to calculate how much ppUSDC user would get for a deposit
@@ -323,7 +327,7 @@ contract PerpDEX {
         uint256 currentTVL = getPoolValue();
         
         if (totalSupply == 0) {
-            return depositAmount; // 1:1 for first deposit
+            return _initialLpShares(depositAmount);
         } else {
             require(currentTVL > 0, "Pool has no value");
             return (depositAmount * totalSupply) / currentTVL;
@@ -429,8 +433,9 @@ contract PerpDEX {
         uint256 ppUSDCToMint;
         
         if (totalSupply == 0) {
-            // First deposit: 1:1 ratio (1 USDC = 1 ppUSDC)
-            ppUSDCToMint = amount;
+            // Normalize collateral to the LP token's decimals. With both
+            // USDC and ppUSDC at 6 decimals, 10,000 USDC mints 10,000 ppUSDC.
+            ppUSDCToMint = _initialLpShares(amount);
         } else {
             // Subsequent deposits: ppUSDC_to_mint = (deposit_amount * total_ppUSDC_supply) / current_TVL
             require(currentTVL > 0, "Pool has no value");
@@ -623,6 +628,16 @@ contract PerpDEX {
             secondaryVaultBalance += feeAmount;
             emit FeeCollected(positionId, user, feeAmount);
         }
+    }
+
+    function _initialLpShares(uint256 collateralAmount) internal view returns (uint256) {
+        uint8 collateralDecimals = usdc.decimals();
+        uint8 lpTokenDecimals = ppUSDC.decimals();
+
+        if (lpTokenDecimals >= collateralDecimals) {
+            return collateralAmount * (10 ** (lpTokenDecimals - collateralDecimals));
+        }
+        return collateralAmount / (10 ** (collateralDecimals - lpTokenDecimals));
     }
 
     // ------------------------------------------------------------------

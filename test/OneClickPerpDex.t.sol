@@ -56,6 +56,12 @@ contract OneClickPerpDexMaxTPTest is Test {
         assertEq(emptyDex.getAllPairs().length, 0);
     }
 
+    function testInitialLpDepositMintsSameDisplayedTokenAmount() public {
+        assertEq(lpToken.decimals(), 6);
+        assertEq(lpToken.balanceOf(address(this)), 100_000_000e6);
+        assertEq(perpDex.getocUSDCPrice(), 1e18);
+    }
+
     function testOpenRejectsTPAbovePairMaxTP() public {
         perpDex.updatePairMaxTP("BTC_USD", 1e18);
 
@@ -83,7 +89,7 @@ contract OneClickPerpDexMaxTPTest is Test {
             .getUserPositions(trader);
 
         vm.expectRevert("TP exceeds pair maxTP");
-        perpDex.modifyTpSl(trader, positions[0].id, 56_000e8, 0);
+        perpDex.modifyTpSl(trader, positions[0].id, 56_000e8, 0, ENTRY_PRICE);
     }
 
     function testModifyZeroTPResetsToPairMaxTP() public {
@@ -92,7 +98,7 @@ contract OneClickPerpDexMaxTPTest is Test {
 
         OneClickPerpDex.Position[] memory positions = perpDex
             .getUserPositions(trader);
-        perpDex.modifyTpSl(trader, positions[0].id, 0, 0);
+        perpDex.modifyTpSl(trader, positions[0].id, 0, 0, ENTRY_PRICE);
 
         positions = perpDex.getUserPositions(trader);
         assertEq(positions[0].takeProfit, 60_000e8);

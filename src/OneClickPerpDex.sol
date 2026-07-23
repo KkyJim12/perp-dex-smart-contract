@@ -10,6 +10,7 @@ interface IocUSDC {
     function burn(address from, uint256 amount) external;
     function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
+    function decimals() external view returns (uint8);
 }
 
 /**
@@ -278,7 +279,10 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 totalSupply = ocUSDC.totalSupply();
         if (totalSupply == 0) return ONE;
         uint256 pool = getPoolValue();
-        return (pool * ONE) / totalSupply;
+        // Return a WAD price independent of collateral and LP-token decimals.
+        return
+            (pool * (10 ** ocUSDC.decimals()) * ONE) /
+            (totalSupply * (10 ** usdc.decimals()));
     }
 
     function depositLP(uint256 amount) external nonReentrant {
@@ -287,7 +291,7 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         uint256 totalSupply = ocUSDC.totalSupply();
 
         uint256 ocUSDCToMint = (totalSupply == 0 || poolBefore == 0)
-            ? amount
+            ? _initialLpShares(amount)
             : (amount * totalSupply) / poolBefore;
 
         require(ocUSDCToMint > 0, "Shares must be > 0");
@@ -302,6 +306,16 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         }
 
         emit LPDeposit(msg.sender, amount, ocUSDCToMint);
+    }
+
+    function _initialLpShares(uint256 collateralAmount) internal view returns (uint256) {
+        uint8 collateralDecimals = usdc.decimals();
+        uint8 lpTokenDecimals = ocUSDC.decimals();
+
+        if (lpTokenDecimals >= collateralDecimals) {
+            return collateralAmount * (10 ** (lpTokenDecimals - collateralDecimals));
+        }
+        return collateralAmount / (10 ** (collateralDecimals - lpTokenDecimals));
     }
 
     function withdrawLP(uint256 ocUSDCAmount) external nonReentrant {

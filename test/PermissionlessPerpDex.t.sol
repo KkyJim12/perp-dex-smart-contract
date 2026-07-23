@@ -34,9 +34,9 @@ contract PermissionlessPerpDexTest is Test {
         vm.stopPrank();
         
         // Give users and LPs USDC
-        usdc.mint(user1, INITIAL_BALANCE);
-        usdc.mint(user2, INITIAL_BALANCE);
-        usdc.mint(lp1, INITIAL_BALANCE);
+        usdc.ownerMint(user1, INITIAL_BALANCE);
+        usdc.ownerMint(user2, INITIAL_BALANCE);
+        usdc.ownerMint(lp1, INITIAL_BALANCE);
         
         // Approve spending
         vm.prank(user1);

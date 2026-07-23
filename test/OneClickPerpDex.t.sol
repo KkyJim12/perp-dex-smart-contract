@@ -26,11 +26,11 @@ contract OneClickPerpDexMaxTPTest is Test {
         lpToken.setOneClickPerpDex(address(perpDex));
         perpDex.authorizeBackend(address(this), true);
 
-        usdc.mint(address(this), 100_000_000e6);
+        usdc.ownerMint(address(this), 100_000_000e6);
         usdc.approve(address(perpDex), type(uint256).max);
         perpDex.depositLP(100_000_000e6);
 
-        usdc.mint(trader, MARGIN * 10);
+        usdc.ownerMint(trader, MARGIN * 10);
         vm.startPrank(trader);
         perpDex.registerUsername("trader");
         usdc.approve(address(perpDex), type(uint256).max);

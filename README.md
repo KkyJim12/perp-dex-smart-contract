@@ -216,16 +216,18 @@ forge verify-contract \
 
 ## Testing After Deployment
 
-### **Mint MockUSDC**
+### **Claim MockUSDC**
 
 ```bash
 cast send <MOCK_USDC_ADDRESS> \
-    "mint(address,uint256)" \
-    <YOUR_ADDRESS> \
-    1000000000 \
+    "mint()" \
     --rpc-url https://rpc.monad.xyz \
     --private-key $PRIVATE_KEY
 ```
+
+Each wallet can claim exactly 1,000 MockUSDC once. The MockUSDC owner can
+mint any amount with `ownerMint(address,uint256)` and can enable or disable
+claims with `setUserMintEnabled(bool)`.
 
 ### **Approve USDC**
 

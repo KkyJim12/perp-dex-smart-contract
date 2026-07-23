@@ -85,11 +85,11 @@ contract PerpDexTest is Test {
         );
         lpToken.setMinter(address(perpDex), true);
 
-        usdc.mint(address(this), 100_000_000e6);
+        usdc.ownerMint(address(this), 100_000_000e6);
         usdc.approve(address(perpDex), type(uint256).max);
         perpDex.depositLP(100_000_000e6);
 
-        usdc.mint(trader, MARGIN * 10);
+        usdc.ownerMint(trader, MARGIN * 10);
         vm.prank(trader);
         usdc.approve(address(perpDex), type(uint256).max);
     }
@@ -365,11 +365,11 @@ contract PerpDexTest is Test {
         );
         limitedLp.setMinter(address(limitedDex), true);
 
-        usdc.mint(address(this), liquidity);
+        usdc.ownerMint(address(this), liquidity);
         usdc.approve(address(limitedDex), liquidity);
         limitedDex.depositLP(liquidity);
 
-        usdc.mint(trader, 1_000e6);
+        usdc.ownerMint(trader, 1_000e6);
         vm.prank(trader);
         usdc.approve(address(limitedDex), type(uint256).max);
     }

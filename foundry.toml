@@ -8,7 +8,10 @@ out = "out"
 libs = ["lib"]
 solc_version = "0.8.20"
 optimizer = true
-optimizer_runs = 200
+# This protocol is deployed on chains enforcing EIP-170's 24,576-byte runtime
+# code limit. A low run count prioritizes compact bytecode over marginally
+# cheaper execution, allowing both DEX implementations to be deployed.
+optimizer_runs = 1
 via_ir = true
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

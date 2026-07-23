@@ -72,6 +72,7 @@ echo ""
 forge script script/DeployAll.s.sol \
     --rpc-url $RPC_URL \
     --broadcast \
+    --slow \
     -vvv
 
 # Check if deployment was successful

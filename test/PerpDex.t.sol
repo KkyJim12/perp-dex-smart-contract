@@ -99,8 +99,7 @@ contract PerpDexTest is Test {
             address(mockPyth),
             address(lpToken)
         );
-        (string[] memory names, , , , , ) = emptyDex.getAllPairsOI();
-        assertEq(names.length, 0);
+        assertEq(emptyDex.totalOIRatio(), 0);
     }
 
     function testInitialLpDepositMintsSameDisplayedTokenAmount() public {

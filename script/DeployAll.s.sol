@@ -28,8 +28,8 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("===================================");
         console.log("Complete PerpDex Deployment");
         console.log("===================================");
-        console.log("Network: Monad");
-        console.log("Chain ID: 143");
+        console.log("Network: connected RPC");
+        console.log("Chain ID:", block.chainid);
         console.log("");
 
         vm.startBroadcast(deployerPrivateKey);

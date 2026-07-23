@@ -1316,42 +1316,6 @@ contract OneClickPerpDex is Initializable, ReentrancyGuard {
         return positions[user];
     }
 
-    function getUserActivePositions(address user) external view returns (Position[] memory) {
-        Position[] memory userPositions = positions[user];
-        uint256 activeCount = 0;
-
-        for (uint256 i = 0; i < userPositions.length; i++) {
-            if (!userPositions[i].isClosed) {
-                activeCount++;
-            }
-        }
-
-        Position[] memory activePositions = new Position[](activeCount);
-        uint256 index = 0;
-        for (uint256 i = 0; i < userPositions.length; i++) {
-            if (!userPositions[i].isClosed) {
-                activePositions[index] = userPositions[i];
-                index++;
-            }
-        }
-
-        return activePositions;
-    }
-
-    function getPosition(address user, bytes32 positionId)
-        external
-        view
-        returns (Position memory)
-    {
-        Position[] memory userPositions = positions[user];
-        for (uint256 i = 0; i < userPositions.length; i++) {
-            if (userPositions[i].id == positionId) {
-                return userPositions[i];
-            }
-        }
-        revert("Position not found");
-    }
-
     function isPositionLiquidatable(
         address user,
         bytes32 positionId,
@@ -1478,55 +1442,4 @@ contract OneClickPerpDex is Initializable, ReentrancyGuard {
         maxPositionSize = info.maxPositionSize;
     }
 
-    /**
-     * @notice Get OI information for all pairs
-     * @return pairNames Array of pair names
-     * @return maxOIPerSides Array of max OI per side
-     * @return currentLongOIs Array of current long OIs
-     * @return currentShortOIs Array of current short OIs
-     * @return availableLongOIs Array of available long OIs
-     * @return availableShortOIs Array of available short OIs
-     */
-    function getAllPairsOI()
-        external
-        view
-        returns (
-            string[] memory pairNames,
-            uint256[] memory maxOIPerSides,
-            uint256[] memory currentLongOIs,
-            uint256[] memory currentShortOIs,
-            uint256[] memory availableLongOIs,
-            uint256[] memory availableShortOIs
-        )
-    {
-        uint256 length = allPairs.length;
-        pairNames = new string[](length);
-        maxOIPerSides = new uint256[](length);
-        currentLongOIs = new uint256[](length);
-        currentShortOIs = new uint256[](length);
-        availableLongOIs = new uint256[](length);
-        availableShortOIs = new uint256[](length);
-        
-        uint256 poolValue = getPoolValue();
-        
-        for (uint256 i = 0; i < length; i++) {
-            PairInfo storage info = allPairs[i];
-            
-            pairNames[i] = info.name;
-            
-            if (totalOIRatio > 0) {
-                // Calculate max OI based on ratio
-                uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
-                maxOIPerSides[i] = maxAllowedOI / 2;
-            } else {
-                maxOIPerSides[i] = 0;
-            }
-            
-            currentLongOIs[i] = info.currentLongOI;
-            currentShortOIs[i] = info.currentShortOI;
-            
-            availableLongOIs[i] = maxOIPerSides[i] > info.currentLongOI ? maxOIPerSides[i] - info.currentLongOI : 0;
-            availableShortOIs[i] = maxOIPerSides[i] > info.currentShortOI ? maxOIPerSides[i] - info.currentShortOI : 0;
-        }
-    }
 }

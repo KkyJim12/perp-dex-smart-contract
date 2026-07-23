@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "lib/pyth-sdk-solidity/PythStructs.sol";
 import "lib/pyth-sdk-solidity/IPyth.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import "lib/openzeppelin-contracts/contracts/proxy/utils/Initializable.sol";
 
 interface IppUSDC {
     function mint(address to, uint256 amount) external;
@@ -13,9 +14,9 @@ interface IppUSDC {
     function decimals() external view returns (uint8);
 }
 
-contract PerpDEX {
-    IPyth public immutable pyth;
-    ERC20 public immutable usdc;
+contract PerpDEX is Initializable {
+    IPyth public pyth;
+    ERC20 public usdc;
     IppUSDC public ppUSDC; // LP token
 
     address public owner;
@@ -206,15 +207,34 @@ contract PerpDEX {
     event TradingResumed(address indexed admin);
 
     constructor(address _usdc, address _pyth, address _ppUSDC) {
+        _initialize(_usdc, _pyth, _ppUSDC, msg.sender);
+    }
+
+    function initialize(
+        address _usdc,
+        address _pyth,
+        address _ppUSDC,
+        address initialOwner
+    ) external {
+        _initialize(_usdc, _pyth, _ppUSDC, initialOwner);
+    }
+
+    function _initialize(
+        address _usdc,
+        address _pyth,
+        address _ppUSDC,
+        address initialOwner
+    ) internal initializer {
         require(
             _usdc != address(0) && _pyth != address(0) && _ppUSDC != address(0),
             "Invalid address"
         );
+        require(initialOwner != address(0), "Invalid owner");
         usdc = ERC20(_usdc);
         pyth = IPyth(_pyth);
         ppUSDC = IppUSDC(_ppUSDC);
-        owner = msg.sender;
-        emit OwnershipTransferred(address(0), msg.sender);
+        owner = initialOwner;
+        emit OwnershipTransferred(address(0), initialOwner);
     }
 
     receive() external payable {}

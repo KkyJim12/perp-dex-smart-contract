@@ -5,11 +5,13 @@ import "lib/forge-std/src/Script.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
 import "../src/MockUSDC.sol";
+import "../src/ProtocolProxy.sol";
 import "./InitialPairConfig.sol";
 
 contract DeployKubchainTestnet is Script, InitialPairConfig {
     function run() external returns (address, address, address) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
         bool deployMockUSDC = vm.envBool("DEPLOY_MOCK_USDC");
         
         address usdcAddress;
@@ -38,7 +40,16 @@ contract DeployKubchainTestnet is Script, InitialPairConfig {
 
         // 2. Deploy ocUSDC token
         console.log("Deploying ocUSDC LP Token...");
-        ocUSDC lpToken = new ocUSDC();
+        ocUSDC ocUSDCImplementation = new ocUSDC();
+        ocUSDC lpToken = ocUSDC(
+            address(
+                new ProtocolProxy(
+                    address(ocUSDCImplementation),
+                    deployer,
+                    abi.encodeCall(ocUSDC.initialize, (deployer))
+                )
+            )
+        );
         console.log("ocUSDC deployed at:");
         console.log(address(lpToken));
 
@@ -46,9 +57,21 @@ contract DeployKubchainTestnet is Script, InitialPairConfig {
 
         // 3. Deploy OneClickPerpDex
         console.log("Deploying OneClickPerpDex...");
-        OneClickPerpDex oneClick = new OneClickPerpDex(
+        OneClickPerpDex oneClickImplementation = new OneClickPerpDex(
             usdcAddress,
             address(lpToken)
+        );
+        OneClickPerpDex oneClick = OneClickPerpDex(
+            address(
+                new ProtocolProxy(
+                    address(oneClickImplementation),
+                    deployer,
+                    abi.encodeCall(
+                        OneClickPerpDex.initialize,
+                        (usdcAddress, address(lpToken), deployer)
+                    )
+                )
+            )
         );
         _configureOneClickPerpDex(oneClick);
         console.log("OneClickPerpDex deployed at:");

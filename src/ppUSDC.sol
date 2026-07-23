@@ -1,20 +1,40 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "./UpgradeableERC20.sol";
 
 /**
  * @title ppUSDC (PerpDex Pool USDC)
  * @notice LP token representing shares in the PerpDex liquidity pool
  * @dev Multiple authorized minters (PerpDex contracts) can mint/burn tokens
  */
-contract ppUSDC is ERC20, Ownable {
+contract ppUSDC is UpgradeableERC20 {
     mapping(address => bool) public authorizedMinters;
+    address public owner;
 
     event MinterAuthorized(address indexed minter, bool authorized);
 
-    constructor() ERC20("PerpDex Pool USDC", "ppUSDC") Ownable(msg.sender) {}
+    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    constructor() {
+        _initialize(msg.sender);
+    }
+
+    function initialize(address initialOwner) external {
+        _initialize(initialOwner);
+    }
+
+    function _initialize(address initialOwner) internal initializer {
+        require(initialOwner != address(0), "Invalid address");
+        __ERC20_init("PerpDex Pool USDC", "ppUSDC");
+        owner = initialOwner;
+        emit OwnershipTransferred(address(0), initialOwner);
+    }
 
     modifier onlyMinter() {
         require(authorizedMinters[msg.sender], "Only authorized minters can call");
@@ -33,6 +53,12 @@ contract ppUSDC is ERC20, Ownable {
 
     function burn(address from, uint256 amount) external onlyMinter {
         _burn(from, amount);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
 
     /// @notice Match the 6-decimal USDC collateral used by the pool.

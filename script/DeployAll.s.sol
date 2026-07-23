@@ -7,6 +7,7 @@ import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
+import "../src/ProtocolProxy.sol";
 import "./InitialPairConfig.sol";
 
 contract DeployAll is Script, InitialPairConfig {
@@ -18,6 +19,7 @@ contract DeployAll is Script, InitialPairConfig {
         address oneClickPerpDexAddress
     ) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
         address pythAddress = vm.envAddress("PYTH_ADDRESS");
         
         // Check if we should deploy MockUSDC or use existing USDC
@@ -52,7 +54,16 @@ contract DeployAll is Script, InitialPairConfig {
         // STEP 2: Deploy ppUSDC (LP token for main PerpDex)
         // ================================================================
         console.log("=== Step 2: Deploy ppUSDC (Main PerpDex LP Token) ===");
-        ppUSDC lpToken = new ppUSDC();
+        ppUSDC ppUSDCImplementation = new ppUSDC();
+        ppUSDC lpToken = ppUSDC(
+            address(
+                new ProtocolProxy(
+                    address(ppUSDCImplementation),
+                    deployer,
+                    abi.encodeCall(ppUSDC.initialize, (deployer))
+                )
+            )
+        );
         ppUSDCAddress = address(lpToken);
         console.log("ppUSDC deployed at:");
         console.log(ppUSDCAddress);
@@ -62,7 +73,23 @@ contract DeployAll is Script, InitialPairConfig {
         // STEP 3: Deploy Main PerpDex
         // ================================================================
         console.log("=== Step 3: Deploy Main PerpDex ===");
-        PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, ppUSDCAddress);
+        PerpDEX perpDexImplementation = new PerpDEX(
+            usdcAddress,
+            pythAddress,
+            ppUSDCAddress
+        );
+        PerpDEX perpDex = PerpDEX(
+            address(
+                new ProtocolProxy(
+                    address(perpDexImplementation),
+                    deployer,
+                    abi.encodeCall(
+                        PerpDEX.initialize,
+                        (usdcAddress, pythAddress, ppUSDCAddress, deployer)
+                    )
+                )
+            )
+        );
         perpDexAddress = address(perpDex);
         _configurePerpDex(perpDex);
         console.log("Main PerpDex deployed at:");
@@ -81,7 +108,16 @@ contract DeployAll is Script, InitialPairConfig {
         // STEP 5: Deploy ocUSDC (LP token for OneClick PerpDex)
         // ================================================================
         console.log("=== Step 5: Deploy ocUSDC (OneClick PerpDex LP Token) ===");
-        ocUSDC ocLpToken = new ocUSDC();
+        ocUSDC ocUSDCImplementation = new ocUSDC();
+        ocUSDC ocLpToken = ocUSDC(
+            address(
+                new ProtocolProxy(
+                    address(ocUSDCImplementation),
+                    deployer,
+                    abi.encodeCall(ocUSDC.initialize, (deployer))
+                )
+            )
+        );
         ocUSDCAddress = address(ocLpToken);
         console.log("ocUSDC deployed at:");
         console.log(ocUSDCAddress);
@@ -91,7 +127,22 @@ contract DeployAll is Script, InitialPairConfig {
         // STEP 6: Deploy OneClick PerpDex
         // ================================================================
         console.log("=== Step 6: Deploy OneClick PerpDex ===");
-        OneClickPerpDex oneClick = new OneClickPerpDex(usdcAddress, ocUSDCAddress);
+        OneClickPerpDex oneClickImplementation = new OneClickPerpDex(
+            usdcAddress,
+            ocUSDCAddress
+        );
+        OneClickPerpDex oneClick = OneClickPerpDex(
+            address(
+                new ProtocolProxy(
+                    address(oneClickImplementation),
+                    deployer,
+                    abi.encodeCall(
+                        OneClickPerpDex.initialize,
+                        (usdcAddress, ocUSDCAddress, deployer)
+                    )
+                )
+            )
+        );
         oneClickPerpDexAddress = address(oneClick);
         _configureOneClickPerpDex(oneClick);
         console.log("OneClick PerpDex deployed at:");

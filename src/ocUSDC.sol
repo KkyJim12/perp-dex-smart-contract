@@ -1,18 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "./UpgradeableERC20.sol";
 
 /**
  * @title ocUSDC (OneClickPerpDex Pool USDC)
  * @notice LP token representing shares in the OneClickPerpDex liquidity pool
  * @dev Only the OneClickPerpDex contract can mint/burn tokens
  */
-contract ocUSDC is ERC20, Ownable {
+contract ocUSDC is UpgradeableERC20 {
     address public oneClickPerpDex;
+    address public owner;
 
-    constructor() ERC20("OneClickPerpDex Pool USDC", "ocUSDC") Ownable(msg.sender) {}
+    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    constructor() {
+        _initialize(msg.sender);
+    }
+
+    function initialize(address initialOwner) external {
+        _initialize(initialOwner);
+    }
+
+    function _initialize(address initialOwner) internal initializer {
+        require(initialOwner != address(0), "Invalid address");
+        __ERC20_init("OneClickPerpDex Pool USDC", "ocUSDC");
+        owner = initialOwner;
+        emit OwnershipTransferred(address(0), initialOwner);
+    }
 
     modifier onlyOneClickPerpDex() {
         require(msg.sender == oneClickPerpDex, "Only OneClickPerpDex can call");
@@ -31,6 +51,12 @@ contract ocUSDC is ERC20, Ownable {
 
     function burn(address from, uint256 amount) external onlyOneClickPerpDex {
         _burn(from, amount);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
 
     /// @notice Match the 6-decimal USDC collateral used by the pool.

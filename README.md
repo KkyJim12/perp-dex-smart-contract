@@ -86,6 +86,19 @@ must be on the correct side of the current price. `PerpDEX` reads Pyth's stored
 price; `OneClickPerpDex` requires its authorized backend to provide the current
 price as the final argument to `modifyTpSl`.
 
+## Upgradeable deployment
+
+`DeployAll`, `DeployWithppUSDC`, `DeployOneClick`, and the Kubchain testnet
+script deploy a `ProtocolProxy` for every production contract: `ppUSDC`,
+`PerpDEX`, `ocUSDC`, and `OneClickPerpDex`. Each proxy has its own state and
+uses the deployer as both proxy admin and contract owner. `MockUSDC` and
+`NativeStaking` are intentionally deployed without proxies.
+
+To upgrade, deploy a compatible replacement implementation and call
+`upgradeTo(newImplementation)` on that contract's proxy from the proxy-admin
+account. Never change the order or type of existing storage variables in an
+upgrade.
+
 ## 🚀 Deploy to Monad in 3 Steps
 
 ### **Step 1: Setup Environment**

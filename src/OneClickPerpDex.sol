@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import "lib/openzeppelin-contracts/contracts/proxy/utils/Initializable.sol";
 
 interface IocUSDC {
     function mint(address to, uint256 amount) external;
@@ -22,9 +22,10 @@ interface IocUSDC {
  * - Has its own LP vault (separate from main PerpDex)
  * - Uses separate ocUSDC token for this vault
  */
-contract OneClickPerpDex is Ownable, ReentrancyGuard {
-    ERC20 public immutable usdc;
-    IocUSDC public immutable ocUSDC; // LP token for this vault (OneClickPerpDex Pool USDC)
+contract OneClickPerpDex is Initializable, ReentrancyGuard {
+    ERC20 public usdc;
+    IocUSDC public ocUSDC; // LP token for this vault (OneClickPerpDex Pool USDC)
+    address public owner;
 
     uint256 public constant ONE = 1e18;
     uint256 public constant WINNING_FEE_BPS = 200; // 2% fee on winning positions only
@@ -152,15 +153,47 @@ contract OneClickPerpDex is Ownable, ReentrancyGuard {
         _;
     }
 
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
     modifier whenTradingActive() {
         require(!tradingPaused, "Trading paused");
         _;
     }
 
-    constructor(address _usdc, address _ocUSDC) Ownable(msg.sender) {
+    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
+
+    constructor(address _usdc, address _ocUSDC) {
+        _initialize(_usdc, _ocUSDC, msg.sender);
+    }
+
+    function initialize(
+        address _usdc,
+        address _ocUSDC,
+        address initialOwner
+    ) external {
+        _initialize(_usdc, _ocUSDC, initialOwner);
+    }
+
+    function _initialize(
+        address _usdc,
+        address _ocUSDC,
+        address initialOwner
+    ) internal initializer {
         require(_usdc != address(0) && _ocUSDC != address(0), "Invalid address");
+        require(initialOwner != address(0), "Invalid owner");
         usdc = ERC20(_usdc);
         ocUSDC = IocUSDC(_ocUSDC);
+        owner = initialOwner;
+        emit OwnershipTransferred(address(0), initialOwner);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid owner");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
 
     receive() external payable {}

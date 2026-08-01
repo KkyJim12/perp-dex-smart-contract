@@ -11,7 +11,7 @@ account permitted to take points snapshots.
 On macOS/Linux/Git Bash:
 
 ```bash
-bash deploy-native-staking.sh
+bash script/deploy/deploy-native-staking.sh
 ```
 
 On Windows Command Prompt:
@@ -22,7 +22,7 @@ deploy-native-staking.bat
 
 Both scripts confirm that the configured chain ID matches the RPC endpoint
 before broadcasting. Pass an alternative environment file as the first argument,
-for example `bash deploy-native-staking.sh .env.avalanche-mainnet`.
+for example `bash script/deploy/deploy-native-staking.sh .env.avalanche-mainnet`.
 
 ## Verify NativeStaking on Snowtrace
 

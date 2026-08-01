@@ -50,12 +50,12 @@ abstract contract InitialPairConfig {
     }
 
     function _configureOneClickPerpDex(OneClickPerpDex dex) internal {
-        dex.addPair("BTC_USD", 2000, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("ETH_USD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("SOL_USD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("BNB_USD", 1000, 50000e6, 2, 75, INITIAL_MAX_TP);
-        dex.addPair("XRP_USD", 500, 50000e6, 2, 75, INITIAL_MAX_TP);
-        dex.addPair("HYPE_USD", 200, 50000e6, 2, 50, INITIAL_MAX_TP);
+        // dex.addPair("BTC_USD", 2000, 50000e6, 2, 100, INITIAL_MAX_TP);
+        // dex.addPair("ETH_USD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
+        // dex.addPair("SOL_USD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
+        // dex.addPair("BNB_USD", 1000, 50000e6, 2, 75, INITIAL_MAX_TP);
+        // dex.addPair("XRP_USD", 500, 50000e6, 2, 75, INITIAL_MAX_TP);
+        // dex.addPair("HYPE_USD", 200, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("MON_USD", 300, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("SUI_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("OP_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
@@ -64,7 +64,7 @@ abstract contract InitialPairConfig {
         // dex.addPair("JUP_USD", 300, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("LINK_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("PYTH_USD", 300, 50000e6, 2, 25, INITIAL_MAX_TP);
-        dex.addPair("DOGE_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
+        // dex.addPair("DOGE_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("SHIB_USD", 200, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("BONK_USD", 200, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("PEPE_USD", 200, 50000e6, 2, 25, INITIAL_MAX_TP);
@@ -85,7 +85,7 @@ abstract contract InitialPairConfig {
         // dex.addPair("NZDUSD", 800, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("QQQ", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("SPY", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("XAG_USD", 1000, 2000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("XAU_USD", 1000, 2000e6, 2, 100, INITIAL_MAX_TP);
+        // dex.addPair("XAG_USD", 1000, 2000e6, 2, 100, INITIAL_MAX_TP);
+        // dex.addPair("XAU_USD", 1000, 2000e6, 2, 100, INITIAL_MAX_TP);
     }
 }

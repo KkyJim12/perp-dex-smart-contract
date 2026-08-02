@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Verify the complete deployment on Avalanche Snowtrace.
-# Supports Avalanche C-Chain mainnet (43114) and Fuji (43113).
+# Verify the complete deployment on Base mainnet through Etherscan API V2.
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -30,23 +29,15 @@ done
 : "${RPC_URL:?Error: RPC_URL is required}"
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 
-case "$CHAIN_ID" in
-    43114)
-        NETWORK_NAME="Avalanche C-Chain"
-        VERIFIER_URL="${AVALANCHE_VERIFIER_URL:-https://api.snowtrace.io/api}"
-        EXPLORER_URL="https://snowtrace.io"
-        ;;
-    43113)
-        NETWORK_NAME="Avalanche Fuji"
-        VERIFIER_URL="${AVALANCHE_VERIFIER_URL:-https://api-testnet.snowtrace.io/api}"
-        EXPLORER_URL="https://testnet.snowtrace.io"
-        ;;
-    *)
-        echo -e "${RED}Error: unsupported Avalanche chain ID ${CHAIN_ID}.${NC}" >&2
-        echo "Expected 43114 (mainnet) or 43113 (Fuji)." >&2
-        exit 1
-        ;;
-esac
+BASE_MAINNET_CHAIN_ID=8453
+NETWORK_NAME="Base Mainnet"
+VERIFIER_URL="${ETHERSCAN_VERIFIER_URL:-https://api.etherscan.io/v2/api?chainid=8453}"
+EXPLORER_URL="https://basescan.org"
+
+if [[ "$CHAIN_ID" != "$BASE_MAINNET_CHAIN_ID" ]]; then
+    echo -e "${RED}Error: CHAIN_ID must be ${BASE_MAINNET_CHAIN_ID} for Base mainnet (got ${CHAIN_ID}).${NC}" >&2
+    exit 1
+fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
@@ -89,7 +80,8 @@ echo "RPC URL:      $RPC_URL"
 echo "Verifier URL: $VERIFIER_URL"
 echo ""
 
-VERIFIER_API_KEY="${SNOWTRACE_API_KEY:-placeholder}"
+: "${ETHERSCAN_API_KEY:?Error: ETHERSCAN_API_KEY is required for Etherscan API V2}"
+VERIFIER_API_KEY="$ETHERSCAN_API_KEY"
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 
@@ -114,7 +106,7 @@ verify_contract() {
         verify-contract
         --rpc-url "$RPC_URL"
         --chain "$CHAIN_ID"
-        --verifier custom
+        --verifier etherscan
         --verifier-url "$VERIFIER_URL"
         --verifier-api-key "$VERIFIER_API_KEY"
         --num-of-optimizations 1

@@ -9,6 +9,7 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+BASE_MAINNET_CHAIN_ID=8453
 
 echo -e "${BLUE}====================================${NC}"
 echo -e "${BLUE}Complete PerpDex Deployment Script${NC}"
@@ -40,12 +41,28 @@ if [ -z "$PYTH_ADDRESS" ]; then
     exit 1
 fi
 
+if ! command -v cast >/dev/null 2>&1; then
+    echo -e "${RED}âœ— cast is not installed or not on PATH${NC}"
+    exit 1
+fi
+
+if [ -n "${CHAIN_ID:-}" ] && [ "$CHAIN_ID" != "$BASE_MAINNET_CHAIN_ID" ]; then
+    echo -e "${RED}âœ— CHAIN_ID must be ${BASE_MAINNET_CHAIN_ID} for Base mainnet (got ${CHAIN_ID})${NC}"
+    exit 1
+fi
+
+ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
+if [ "$ACTUAL_CHAIN_ID" != "$BASE_MAINNET_CHAIN_ID" ]; then
+    echo -e "${RED}âœ— RPC returned chain ID ${ACTUAL_CHAIN_ID}; expected Base mainnet (${BASE_MAINNET_CHAIN_ID})${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}✓ All required environment variables set${NC}"
 echo ""
 
 # Display deployment info
-echo -e "${BLUE}Network: Avalanche${NC}"
-echo -e "${BLUE}Chain ID: ${CHAIN_ID:-143}${NC}"
+echo -e "${BLUE}Network: Base Mainnet${NC}"
+echo -e "${BLUE}Chain ID: ${BASE_MAINNET_CHAIN_ID}${NC}"
 echo -e "${BLUE}RPC URL: $RPC_URL${NC}"
 echo ""
 

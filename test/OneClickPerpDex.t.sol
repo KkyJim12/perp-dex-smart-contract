@@ -122,6 +122,40 @@ contract OneClickPerpDexMaxTPTest is Test {
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
     }
 
+    function testEmergencyCloseSupportsAnyConfiguredPair() public {
+        perpDex.addPair("DOGE_USD", 100, 50_000e6, 2, 100, 5e18);
+        perpDex.openPosition(
+            trader,
+            "DOGE_USD",
+            true,
+            MARGIN,
+            LEVERAGE,
+            10e8,
+            0,
+            0
+        );
+
+        string[] memory pairs = new string[](1);
+        pairs[0] = "DOGE_USD";
+        uint256[] memory prices = new uint256[](1);
+        prices[0] = 11e8;
+
+        perpDex.closeAllPositions(pairs, prices);
+
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+        assertTrue(positions[0].isClosed);
+        assertEq(positions[0].closePrice, 11e8);
+    }
+
+    function testEmergencyCloseRejectsMismatchedPrices() public {
+        string[] memory pairs = new string[](1);
+        pairs[0] = "BTC_USD";
+        uint256[] memory prices = new uint256[](0);
+
+        vm.expectRevert("Pairs/prices length mismatch");
+        perpDex.closeAllPositions(pairs, prices);
+    }
+
     function _openLong(uint256 takeProfit) internal {
         perpDex.openPosition(
             trader,

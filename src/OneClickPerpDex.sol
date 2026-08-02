@@ -1116,6 +1116,54 @@ contract OneClickPerpDex is ReentrancyGuard {
     // ADMIN EMERGENCY CLOSE ALL
     // ------------------------------------------------------------------
 
+    /// @notice Closes eligible open positions using owner-reviewed backend prices.
+    /// @dev OneClickPerpDex has no on-chain oracle, so the owner explicitly
+    /// supplies a price for each pair to be closed. Positions in pairs omitted
+    /// from `pairs` are intentionally skipped.
+    /// @param pairs Pair names whose positions may be emergency-closed.
+    /// @param prices Close prices corresponding one-to-one with `pairs`.
+    function closeAllPositions(
+        string[] calldata pairs,
+        uint256[] calldata prices
+    ) external onlyOwner nonReentrant {
+        require(pairs.length == prices.length, "Pairs/prices length mismatch");
+        require(pairs.length > 0, "No prices supplied");
+
+        for (uint256 p = 0; p < pairs.length; p++) {
+            require(prices[p] > 0, "Invalid close price");
+            require(bytes(pairInfo[pairs[p]].name).length > 0, "Pair not found");
+
+            for (uint256 duplicate = 0; duplicate < p; duplicate++) {
+                require(
+                    keccak256(bytes(pairs[duplicate])) != keccak256(bytes(pairs[p])),
+                    "Duplicate pair"
+                );
+            }
+        }
+
+        for (uint256 u = 0; u < allUsers.length; u++) {
+            address user = allUsers[u];
+            Position[] storage userPositions = positions[user];
+
+            for (uint256 i = 0; i < userPositions.length; i++) {
+                Position storage pos = userPositions[i];
+                if (pos.isClosed || pairPaused[pos.pairs]) continue;
+
+                for (uint256 p = 0; p < pairs.length; p++) {
+                    if (keccak256(bytes(pos.pairs)) == keccak256(bytes(pairs[p]))) {
+                        _closePosition(user, pos, prices[p], "close");
+                        break;
+                    }
+                }
+            }
+        }
+
+        emit AllPositionsClosed(msg.sender, block.timestamp);
+    }
+
+    /// @notice Legacy BTC/ETH/SOL emergency close entrypoint.
+    /// @dev Retained for existing integrations. New integrations should call
+    /// the generic overloaded `closeAllPositions(string[],uint256[])` above.
     function closeAllPositions(
         uint256 btcPrice,
         uint256 ethPrice,

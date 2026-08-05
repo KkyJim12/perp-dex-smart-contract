@@ -9,7 +9,7 @@ import "../src/PerpDex.sol";
 abstract contract InitialPairConfig {
     uint256 internal constant INITIAL_MAX_TP = 5e18;
 
-    function _configurePerpDex(PerpDEX dex) internal {
+    function _configurePerpDex(PerpDex dex) internal {
         // dex.addPair("BTC_USD", 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 20, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("ETH_USD", 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 10, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("SOL_USD", 0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 10, 50000e6, 2, 100, INITIAL_MAX_TP);

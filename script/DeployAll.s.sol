@@ -62,7 +62,7 @@ contract DeployAll is Script, InitialPairConfig {
         // STEP 3: Deploy Main PerpDex
         // ================================================================
         console.log("=== Step 3: Deploy Main PerpDex ===");
-        PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, ppUSDCAddress);
+        PerpDex perpDex = new PerpDex(usdcAddress, pythAddress, ppUSDCAddress);
         perpDexAddress = address(perpDex);
         console.log("Main PerpDex deployed at:");
         console.log(perpDexAddress);
@@ -191,7 +191,7 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("--- Main PerpDex ---");
         console.log("forge verify-contract");
         console.log(perpDexAddress);
-        console.log("src/PerpDex.sol:PerpDEX");
+        console.log("src/PerpDex.sol:PerpDex");
         console.log("--constructor-args $(cast abi-encode 'constructor(address,address,address)'");
         console.log(usdcAddress);
         console.log(pythAddress);

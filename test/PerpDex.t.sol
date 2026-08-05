@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {PythStructs} from "pyth-sdk-solidity/PythStructs.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
-import {PerpDEX} from "../src/PerpDex.sol";
+import {PerpDex} from "../src/PerpDex.sol";
 import {ppUSDC} from "../src/ppUSDC.sol";
 
 contract MaxTPMockPyth {
@@ -61,7 +61,7 @@ contract PerpDexTest is Test {
     MockUSDC internal usdc;
     ppUSDC internal lpToken;
     MaxTPMockPyth internal mockPyth;
-    PerpDEX internal perpDex;
+    PerpDex internal perpDex;
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -69,7 +69,7 @@ contract PerpDexTest is Test {
         mockPyth = new MaxTPMockPyth();
         mockPyth.setPrice(ENTRY_PRICE);
 
-        perpDex = new PerpDEX(
+        perpDex = new PerpDex(
             address(usdc),
             address(mockPyth),
             address(lpToken)
@@ -105,7 +105,7 @@ contract PerpDexTest is Test {
     }
 
     function testConstructorDoesNotAddPairs() public {
-        PerpDEX emptyDex = new PerpDEX(
+        PerpDex emptyDex = new PerpDex(
             address(usdc),
             address(mockPyth),
             address(lpToken)
@@ -194,7 +194,7 @@ contract PerpDexTest is Test {
     }
 
     function testWorstCaseProfitCapLimitsExposureToThirtyPercentOfPool() public {
-        (PerpDEX limitedDex, ) = _deployLimitedDex(1_000e6);
+        (PerpDex limitedDex, ) = _deployLimitedDex(1_000e6);
 
         // At a 500% max TP, 100 USDC margin reserves 500 USDC of LP loss.
         // The 1,000 USDC pool only permits 300 USDC of worst-case loss.
@@ -212,7 +212,7 @@ contract PerpDexTest is Test {
     }
 
     function testTpCloseAtThirtyPercentDrawdownPausesNewTrading() public {
-        (PerpDEX limitedDex, ) = _deployLimitedDex(1_000e6);
+        (PerpDex limitedDex, ) = _deployLimitedDex(1_000e6);
 
         vm.prank(trader);
         limitedDex.openPosition(
@@ -352,9 +352,9 @@ contract PerpDexTest is Test {
 
     function _deployLimitedDex(
         uint256 liquidity
-    ) internal returns (PerpDEX limitedDex, ppUSDC limitedLp) {
+    ) internal returns (PerpDex limitedDex, ppUSDC limitedLp) {
         limitedLp = new ppUSDC();
-        limitedDex = new PerpDEX(
+        limitedDex = new PerpDex(
             address(usdc),
             address(mockPyth),
             address(limitedLp)
@@ -380,7 +380,7 @@ contract PerpDexTest is Test {
     }
 
     function _positionDataFor(
-        PerpDEX dex,
+        PerpDex dex,
         uint256 index
     ) internal view returns (bytes32 id, uint256 payout, uint256 takeProfit) {
         (

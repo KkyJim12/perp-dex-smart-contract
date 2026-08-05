@@ -13,7 +13,7 @@ interface IppUSDC {
     function decimals() external view returns (uint8);
 }
 
-contract PerpDEX {
+contract PerpDex {
     IPyth public pyth;
     ERC20 public usdc;
     IppUSDC public ppUSDC; // LP token

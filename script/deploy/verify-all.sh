@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Verify the complete deployment on Base mainnet through Etherscan API V2.
+# Verify the complete deployment on the network configured in .env.
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -29,15 +29,23 @@ done
 : "${RPC_URL:?Error: RPC_URL is required}"
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 
-BASE_MAINNET_CHAIN_ID=8453
-NETWORK_NAME="Base Mainnet"
-VERIFIER_URL="${ETHERSCAN_VERIFIER_URL:-https://api.etherscan.io/v2/api?chainid=8453}"
-EXPLORER_URL="https://basescan.org"
+case "$CHAIN_ID" in
+    8453)
+        NETWORK_NAME="${NETWORK_NAME:-Base Mainnet}"
+        EXPLORER_URL="${EXPLORER_URL:-https://basescan.org}"
+        ;;
+    43114)
+        NETWORK_NAME="${NETWORK_NAME:-Avalanche C-Chain}"
+        EXPLORER_URL="${EXPLORER_URL:-https://snowscan.xyz}"
+        ;;
+    *)
+        NETWORK_NAME="${NETWORK_NAME:-Chain ${CHAIN_ID}}"
+        EXPLORER_URL="${EXPLORER_URL:-Not configured}"
+        ;;
+esac
 
-if [[ "$CHAIN_ID" != "$BASE_MAINNET_CHAIN_ID" ]]; then
-    echo -e "${RED}Error: CHAIN_ID must be ${BASE_MAINNET_CHAIN_ID} for Base mainnet (got ${CHAIN_ID}).${NC}" >&2
-    exit 1
-fi
+VERIFIER_URL="https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}"
+VERIFIER_API_KEY="${ETHERSCAN_API_KEY:-}"
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
@@ -80,8 +88,7 @@ echo "RPC URL:      $RPC_URL"
 echo "Verifier URL: $VERIFIER_URL"
 echo ""
 
-: "${ETHERSCAN_API_KEY:?Error: ETHERSCAN_API_KEY is required for Etherscan API V2}"
-VERIFIER_API_KEY="$ETHERSCAN_API_KEY"
+: "${VERIFIER_API_KEY:?Error: ETHERSCAN_API_KEY is required for Etherscan API V2}"
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 
@@ -108,7 +115,7 @@ verify_contract() {
         --chain "$CHAIN_ID"
         --verifier etherscan
         --verifier-url "$VERIFIER_URL"
-        --verifier-api-key "$VERIFIER_API_KEY"
+        --etherscan-api-key "$VERIFIER_API_KEY"
         --num-of-optimizations 1
         --via-ir
         --watch
@@ -141,7 +148,7 @@ fi
 verify_contract "$PPUSDC_ADDRESS" "src/ppUSDC.sol:ppUSDC"
 verify_contract "$OCUSDC_ADDRESS" "src/ocUSDC.sol:ocUSDC"
 
-# PerpDEX constructor: (_usdc, _pyth, _ppUSDC)
+# PerpDex constructor: (_usdc, _pyth, _ppUSDC)
 PERPDEX_ARGS="$(
     cast abi-encode \
         "constructor(address,address,address)" \
@@ -151,7 +158,7 @@ PERPDEX_ARGS="$(
 )"
 verify_contract \
     "$PERPDEX_ADDRESS" \
-    "src/PerpDex.sol:PerpDEX" \
+    "src/PerpDex.sol:PerpDex" \
     "$PERPDEX_ARGS"
 
 # OneClickPerpDex constructor: (_usdc, _ocUSDC)

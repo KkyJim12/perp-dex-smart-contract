@@ -4,11 +4,11 @@ pragma solidity ^0.8.20;
 import "lib/forge-std/src/Script.sol";
 import "./InitialPairConfig.sol";
 
-/// @notice Configure an already-deployed PerpDEX owned by PRIVATE_KEY.
+/// @notice Configure an already-deployed PerpDex owned by PRIVATE_KEY.
 contract ConfigurePerpDexPairs is Script, InitialPairConfig {
     function run() external {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
-        PerpDEX dex = PerpDEX(
+        PerpDex dex = PerpDex(
             payable(vm.envAddress("PERPDEX_ADDRESS"))
         );
 

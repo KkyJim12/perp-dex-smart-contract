@@ -66,7 +66,7 @@ configuration against a contract that already contains these pairs.
 
 ## LP risk circuit breaker
 
-Both `PerpDEX` and `OneClickPerpDex` reserve the maximum possible profit for
+Both `PerpDex` and `OneClickPerpDex` reserve the maximum possible profit for
 every open position (`margin * pair.maxTP`). New positions are rejected once
 the aggregate reserved profit would exceed 30% of the current LP pool. At the
 default 500% max TP, each 1 USDC of margin therefore reserves 5 USDC.
@@ -82,7 +82,7 @@ after resolving the incident.
 The owner can use `setPairPaused(pair, true)` or `pauseAllPairs()` to freeze a
 specific market or every market. A paused pair rejects opens, closes, TP/SL
 triggers, and liquidations. TP/SL edits remain available, but their new levels
-must be on the correct side of the current price. `PerpDEX.modifyTpSl` receives
+must be on the correct side of the current price. `PerpDex.modifyTpSl` receives
 Pyth price-update data from the frontend, pays the required Pyth update fee,
 and validates the edit against the updated feed price. `OneClickPerpDex`
 requires its authorized backend to provide the current price as the final
@@ -91,7 +91,7 @@ argument to `modifyTpSl`.
 ## Direct deployment
 
 `DeployAll`, `DeployWithppUSDC`, `DeployOneClick`, and the Kubchain testnet
-script deploy `ppUSDC`, `PerpDEX`, `ocUSDC`, and `OneClickPerpDex` directly.
+script deploy `ppUSDC`, `PerpDex`, `ocUSDC`, and `OneClickPerpDex` directly.
 The addresses printed by the scripts are the contract addresses to use in the
 frontend. Deployments are not upgradeable; deploy a new system to change
 contract code.
@@ -180,7 +180,7 @@ forge verify-contract \
     --chain-id 143 \
     --constructor-args $(cast abi-encode "constructor(address,address,address)" <USDC> <PYTH> <PPUSDC>) \
     <PERPDEX_ADDRESS> \
-    src/PerpDex.sol:PerpDEX
+    src/PerpDex.sol:PerpDex
 ```
 
 ---

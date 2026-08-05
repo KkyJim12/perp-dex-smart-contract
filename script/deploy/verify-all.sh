@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 # Verify the complete deployment on the network configured in .env.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -14,9 +17,10 @@ if [[ ! -f .env ]]; then
 fi
 
 # Export .env variables while preserving inline comments and quoted values.
+# Strip CRLF carriage returns so the script works from Git Bash on Windows too.
 set -a
 # shellcheck disable=SC1091
-source .env
+source <(tr -d '\r' < .env)
 set +a
 
 for command in forge cast; do
@@ -29,7 +33,26 @@ done
 : "${RPC_URL:?Error: RPC_URL is required}"
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 
+VERIFIER="etherscan"
+VERIFIER_URL="https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}"
+VERIFIER_API_KEY="${ETHERSCAN_API_KEY:-}"
+REQUIRES_API_KEY=true
+
 case "$CHAIN_ID" in
+    143)
+        NETWORK_NAME="${NETWORK_NAME:-Monad Mainnet}"
+        EXPLORER_URL="${EXPLORER_URL:-https://monadvision.com}"
+        VERIFIER="sourcify"
+        VERIFIER_URL="${MONAD_SOURCIFY_URL:-https://sourcify-api-monad.blockvision.org/}"
+        REQUIRES_API_KEY=false
+        ;;
+    10143)
+        NETWORK_NAME="${NETWORK_NAME:-Monad Testnet}"
+        EXPLORER_URL="${EXPLORER_URL:-https://testnet.monadvision.com}"
+        VERIFIER="sourcify"
+        VERIFIER_URL="${MONAD_SOURCIFY_URL:-https://sourcify-api-monad.blockvision.org/}"
+        REQUIRES_API_KEY=false
+        ;;
     8453)
         NETWORK_NAME="${NETWORK_NAME:-Base Mainnet}"
         EXPLORER_URL="${EXPLORER_URL:-https://basescan.org}"
@@ -43,9 +66,6 @@ case "$CHAIN_ID" in
         EXPLORER_URL="${EXPLORER_URL:-Not configured}"
         ;;
 esac
-
-VERIFIER_URL="https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}"
-VERIFIER_API_KEY="${ETHERSCAN_API_KEY:-}"
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
@@ -85,10 +105,15 @@ echo -e "${YELLOW}${NETWORK_NAME} Contract Verification${NC}"
 echo -e "${YELLOW}========================================${NC}"
 echo "Chain ID:     $CHAIN_ID"
 echo "RPC URL:      $RPC_URL"
+echo "Verifier:     $VERIFIER"
 echo "Verifier URL: $VERIFIER_URL"
 echo ""
 
-: "${VERIFIER_API_KEY:?Error: ETHERSCAN_API_KEY is required for Etherscan API V2}"
+if [[ "$REQUIRES_API_KEY" == true && -z "$VERIFIER_API_KEY" ]]; then
+    echo -e "${RED}Error: ETHERSCAN_API_KEY is required for Etherscan API V2.${NC}" >&2
+    exit 1
+fi
+
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 
@@ -113,13 +138,15 @@ verify_contract() {
         verify-contract
         --rpc-url "$RPC_URL"
         --chain "$CHAIN_ID"
-        --verifier etherscan
+        --verifier "$VERIFIER"
         --verifier-url "$VERIFIER_URL"
-        --etherscan-api-key "$VERIFIER_API_KEY"
         --num-of-optimizations 1
         --via-ir
-        --watch
     )
+
+    if [[ "$REQUIRES_API_KEY" == true ]]; then
+        args+=(--etherscan-api-key "$VERIFIER_API_KEY" --watch)
+    fi
 
     if [[ -n "$constructor_args" ]]; then
         args+=(--constructor-args "$constructor_args")

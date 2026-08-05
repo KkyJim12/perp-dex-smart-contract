@@ -96,6 +96,15 @@ The addresses printed by the scripts are the contract addresses to use in the
 frontend. Deployments are not upgradeable; deploy a new system to change
 contract code.
 
+The main deployment scripts deliberately do not add trading pairs. Once the
+contracts are deployed and the LP minters are authorized, configure pairs in a
+separate transaction sequence:
+
+```bash
+forge script script/ConfigureInitialPairs.s.sol:ConfigurePerpDexPairs --rpc-url "$RPC_URL" --broadcast
+forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs --rpc-url "$RPC_URL" --broadcast
+```
+
 ## 🚀 Deploy to Monad in 3 Steps
 
 ### **Step 1: Setup Environment**

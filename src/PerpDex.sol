@@ -329,6 +329,18 @@ contract PerpDEX {
             (totalSupply * (10 ** usdc.decimals()));
     }
 
+    /**
+     * @notice Returns the current USDC value of an address's LP position.
+     * @dev This is the amount returned if the address withdraws all of its
+     *      current ppUSDC. It is a current value, not historical deposits.
+    */
+    function getUserLPValue(address user) external view returns (uint256) {
+        uint256 lpShares = ppUSDC.balanceOf(user);
+
+        if (lpShares == 0) return 0;
+        return (lpShares * getPoolValue()) / ppUSDC.totalSupply();
+    }
+
     // Helper function to calculate how much ppUSDC user would get for a deposit
     function calculateDepositShares(uint256 depositAmount) external view returns (uint256) {
         require(depositAmount > 0, "Amount must be > 0");

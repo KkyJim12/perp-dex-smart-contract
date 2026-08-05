@@ -37,7 +37,6 @@ contract DeployWithppUSDC is Script, InitialPairConfig {
 
         // 2. Deploy PerpDex
         PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, address(lpToken));
-        _configurePerpDex(perpDex);
         console.log("PerpDex deployed at:");
         console.log(address(perpDex));
 
@@ -49,6 +48,9 @@ contract DeployWithppUSDC is Script, InitialPairConfig {
         // lpToken.transferOwnership(multisigAddress);
 
         vm.stopBroadcast();
+
+        console.log("Initial trading pairs were not added during deployment.");
+        console.log("Run ConfigureInitialPairs.s.sol separately after deployment.");
 
         console.log("");
         console.log("=== Deployment Summary ===");

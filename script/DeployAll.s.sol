@@ -64,7 +64,6 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("=== Step 3: Deploy Main PerpDex ===");
         PerpDEX perpDex = new PerpDEX(usdcAddress, pythAddress, ppUSDCAddress);
         perpDexAddress = address(perpDex);
-        _configurePerpDex(perpDex);
         console.log("Main PerpDex deployed at:");
         console.log(perpDexAddress);
         console.log("");
@@ -93,7 +92,6 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("=== Step 6: Deploy OneClick PerpDex ===");
         OneClickPerpDex oneClick = new OneClickPerpDex(usdcAddress, ocUSDCAddress);
         oneClickPerpDexAddress = address(oneClick);
-        _configureOneClickPerpDex(oneClick);
         console.log("OneClick PerpDex deployed at:");
         console.log(oneClickPerpDexAddress);
         console.log("");
@@ -107,6 +105,9 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("");
 
         vm.stopBroadcast();
+
+        console.log("Initial trading pairs were not added during deployment.");
+        console.log("Run ConfigureInitialPairs.s.sol separately after deployment.");
 
         // ================================================================
         // DEPLOYMENT SUMMARY

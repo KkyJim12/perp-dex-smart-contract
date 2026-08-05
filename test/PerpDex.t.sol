@@ -122,6 +122,11 @@ contract PerpDexTest is Test {
         assertEq(perpDex.getppUSDCPrice(), 1e18);
     }
 
+    function testFrontendUserLPValueView() public {
+        assertEq(perpDex.getUserLPValue(address(this)), 100_000_000e6);
+        assertEq(perpDex.getUserLPValue(trader), 0);
+    }
+
     function testOpenRejectsTPAbovePairMaxTP() public {
         perpDex.updatePairMaxTP("BTC_USD", 1e18); // 100% of margin
 

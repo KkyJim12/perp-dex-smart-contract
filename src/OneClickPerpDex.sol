@@ -90,6 +90,9 @@ contract OneClickPerpDex is ReentrancyGuard {
     // User fund management (internal balance)
     mapping(address => uint256) public userBalances;
     mapping(address => uint256) public lockedBalances;
+    // Aggregate all trader balances. Unlike `allUsers`, this also covers users
+    // who deposit without registering a username.
+    uint256 public totalUserBalances;
 
     // Vault PnL Tracking
     int256 public vaultTotalPnL;
@@ -234,6 +237,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         
         userBalances[msg.sender] += amount;
+        totalUserBalances += amount;
         
         emit Deposit(msg.sender, amount, userBalances[msg.sender]);
     }
@@ -245,6 +249,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         require(availableBalance >= amount, "Insufficient available balance");
         
         userBalances[msg.sender] -= amount;
+        totalUserBalances -= amount;
         
         require(usdc.transfer(msg.sender, amount), "Transfer failed");
         
@@ -285,18 +290,16 @@ contract OneClickPerpDex is ReentrancyGuard {
 
     function getPoolValue() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
-        // Subtract user funds (internal balances), open margin, and secondary vault
-        uint256 userFunds = getTotalUserFunds();
-        uint256 reserved = userFunds + totalOpenMargin + secondaryVaultBalance;
+        // Trader balances (including locked margin) and fee-vault funds are
+        // liabilities held alongside LP collateral, not LP pool value.
+        // Locked margin is already included in totalUserBalances, so it must
+        // not be subtracted again.
+        uint256 reserved = totalUserBalances + secondaryVaultBalance;
         return bal > reserved ? bal - reserved : 0;
     }
 
     function getTotalUserFunds() public view returns (uint256) {
-        uint256 total = 0;
-        for (uint256 i = 0; i < allUsers.length; i++) {
-            total += userBalances[allUsers[i]];
-        }
-        return total;
+        return totalUserBalances;
     }
 
     function getocUSDCPrice() external view returns (uint256) {
@@ -984,7 +987,9 @@ contract OneClickPerpDex is ReentrancyGuard {
                 // Deduct full margin from user's internal balance (100% loss)
                 if (userBalances[user] >= pos.margin) {
                     userBalances[user] -= pos.margin;
+                    totalUserBalances -= pos.margin;
                 } else {
+                    totalUserBalances -= userBalances[user];
                     userBalances[user] = 0;
                 }
 
@@ -1091,12 +1096,15 @@ contract OneClickPerpDex is ReentrancyGuard {
             // User made profit - add the profit to their balance
             uint256 profit = payout - pos.margin;
             userBalances[user] += profit;
+            totalUserBalances += profit;
         } else if (payout < pos.margin) {
             // User made loss - deduct the loss from their balance
             uint256 loss = pos.margin - payout;
             if (userBalances[user] >= loss) {
                 userBalances[user] -= loss;
+                totalUserBalances -= loss;
             } else {
+                totalUserBalances -= userBalances[user];
                 userBalances[user] = 0;
             }
         }

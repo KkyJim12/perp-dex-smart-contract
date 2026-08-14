@@ -122,6 +122,22 @@ contract OneClickPerpDexMaxTPTest is Test {
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
     }
 
+    function testPoolValueExcludesUnregisteredTraderDepositAndLockedMargin() public {
+        address unregisteredTrader = makeAddr("unregisteredTrader");
+        uint256 traderDeposit = 1_000e6;
+        usdc.ownerMint(unregisteredTrader, traderDeposit);
+
+        vm.startPrank(unregisteredTrader);
+        usdc.approve(address(perpDex), traderDeposit);
+        perpDex.deposit(traderDeposit);
+        vm.stopPrank();
+
+        assertEq(perpDex.getPoolValue(), 100_000_000e6);
+
+        _openLong(0);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6);
+    }
+
     function testEmergencyCloseSupportsAnyConfiguredPair() public {
         perpDex.addPair("DOGE_USD", 100, 50_000e6, 2, 100, 5e18);
         perpDex.openPosition(

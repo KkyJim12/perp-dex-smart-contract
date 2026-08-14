@@ -1,0 +1,14 @@
+{
+  "lib/fhevm-solidity": {
+    "rev": "c90044bbe594af26bcaac0b6224eea2c54817c18"
+  },
+  "lib/forge-std": {
+    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+  },
+  "lib/openzeppelin-contracts": {
+    "rev": "c64a1edb67b6e3f4a15cca8909c9482ad33a02b0"
+  },
+  "lib/pyth-sdk-solidity": {
+    "rev": "11d6bcfc2e56885535a9a8e3c8417847cb20be14"
+  }
+}

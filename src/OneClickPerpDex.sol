@@ -94,6 +94,11 @@ contract OneClickPerpDex is ReentrancyGuard {
     // who deposit without registering a username.
     uint256 public totalUserBalances;
 
+    // USDC explicitly committed to the OneClick LP pool. This is kept
+    // separate from the contract's USDC balance, which also holds trader
+    // deposits and secondary-vault funds.
+    uint256 public totalStakedUSDC;
+
     // Vault PnL Tracking
     int256 public vaultTotalPnL;
     uint256 public vaultTotalProfit;
@@ -289,13 +294,7 @@ contract OneClickPerpDex is ReentrancyGuard {
     // ------------------------------------------------------------------
 
     function getPoolValue() public view returns (uint256) {
-        uint256 bal = usdc.balanceOf(address(this));
-        // Trader balances (including locked margin) and fee-vault funds are
-        // liabilities held alongside LP collateral, not LP pool value.
-        // Locked margin is already included in totalUserBalances, so it must
-        // not be subtracted again.
-        uint256 reserved = totalUserBalances + secondaryVaultBalance;
-        return bal > reserved ? bal - reserved : 0;
+        return totalStakedUSDC;
     }
 
     function getTotalUserFunds() public view returns (uint256) {
@@ -326,6 +325,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         // User transfers USDC directly (signs transaction)
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
+        totalStakedUSDC += amount;
         ocUSDC.mint(msg.sender, ocUSDCToMint);
 
         if (latestLiquiditySnapshot == 0) {
@@ -360,6 +360,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         require(usdcAmount > 0, "Amount must be > 0");
 
         ocUSDC.burn(msg.sender, ocUSDCAmount);
+        totalStakedUSDC -= usdcAmount;
 
         // Transfer USDC directly to user
         require(usdc.transfer(msg.sender, usdcAmount), "Transfer failed");

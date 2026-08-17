@@ -122,7 +122,7 @@ contract OneClickPerpDexMaxTPTest is Test {
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
     }
 
-    function testPoolValueExcludesUnregisteredTraderDepositAndLockedMargin() public {
+    function testPoolValueUsesOnlyStakedUSDC() public {
         address unregisteredTrader = makeAddr("unregisteredTrader");
         uint256 traderDeposit = 1_000e6;
         usdc.ownerMint(unregisteredTrader, traderDeposit);
@@ -136,6 +136,13 @@ contract OneClickPerpDexMaxTPTest is Test {
 
         _openLong(0);
         assertEq(perpDex.getPoolValue(), 100_000_000e6);
+
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+        perpDex.closePosition(trader, positions[0].id, 49_500e8);
+
+        // A trader loss stays outside the staked-USDC accounting.
+        assertEq(perpDex.getPoolValue(), 100_000_000e6);
+        assertEq(perpDex.totalStakedUSDC(), 100_000_000e6);
     }
 
     function testEmergencyCloseSupportsAnyConfiguredPair() public {

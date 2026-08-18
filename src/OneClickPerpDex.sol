@@ -22,6 +22,10 @@ interface IocUSDC {
  * - Uses separate ocUSDC token for this vault
  */
 contract OneClickPerpDex is ReentrancyGuard {
+    error InvalidLeverage();
+    error PositionSizeTooLarge();
+    error InsufficientAvailableBalance();
+
     ERC20 public usdc;
     IocUSDC public ocUSDC; // LP token for this vault (OneClickPerpDex Pool USDC)
     address public owner;
@@ -656,8 +660,9 @@ contract OneClickPerpDex is ReentrancyGuard {
         require(!pairPaused[pairs], "Pair paused");
 
         // Validate leverage limits for this pair
-        require(leverage >= info.minLeverage, "Leverage below pair minimum");
-        require(leverage <= info.maxLeverage, "Leverage exceeds pair maximum");
+        if (leverage < info.minLeverage || leverage > info.maxLeverage) {
+            revert InvalidLeverage();
+        }
 
         // Calculate position size
         uint256 netSize = margin * leverage;
@@ -673,7 +678,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         );
         
         // Validate position size limit
-        require(netSize <= info.maxPositionSize, "Position size exceeds pair limit");
+        if (netSize > info.maxPositionSize) revert PositionSizeTooLarge();
 
         // Validate OI limit (based on ratio distribution, split 50/50 between long and short)
         uint256 poolValue = getPoolValue();
@@ -696,7 +701,7 @@ contract OneClickPerpDex is ReentrancyGuard {
 
         // Check user has sufficient available balance (internal balance system)
         uint256 availableBalance = getAvailableBalance(user);
-        require(availableBalance >= margin, "Insufficient available balance");
+        if (availableBalance < margin) revert InsufficientAvailableBalance();
 
         // Lock user funds in internal balance
         lockedBalances[user] += margin;
@@ -1247,10 +1252,13 @@ contract OneClickPerpDex is ReentrancyGuard {
     ) external onlyOwner {
         PairInfo storage info = pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
-        require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
-        require(minLeverage <= maxLeverage, "Min leverage > max leverage");
+        if (
+            minLeverage == 0 ||
+            maxLeverage == 0 ||
+            minLeverage > maxLeverage
+        ) revert InvalidLeverage();
         require(oiRatio > 0, "Invalid OI ratio");
-        require(maxPositionSize > 0, "Invalid position size");
+        if (maxPositionSize == 0) revert PositionSizeTooLarge();
         _validatePairMaxTP(info.maxTP, maxLeverage);
 
         // Update total ratio
@@ -1335,10 +1343,13 @@ contract OneClickPerpDex is ReentrancyGuard {
         uint256 maxTP
     ) external onlyOwner {
         require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
-        require(minLeverage > 0 && maxLeverage > 0, "Invalid leverage");
-        require(minLeverage <= maxLeverage, "Min leverage > max leverage");
+        if (
+            minLeverage == 0 ||
+            maxLeverage == 0 ||
+            minLeverage > maxLeverage
+        ) revert InvalidLeverage();
         require(oiRatio > 0, "Invalid OI ratio");
-        require(maxPositionSize > 0, "Invalid position size");
+        if (maxPositionSize == 0) revert PositionSizeTooLarge();
 
         _addPair(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage, maxTP);
     }

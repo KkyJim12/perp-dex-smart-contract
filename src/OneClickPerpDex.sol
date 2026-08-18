@@ -294,9 +294,9 @@ contract OneClickPerpDex is ReentrancyGuard {
     // ------------------------------------------------------------------
 
     function getPoolValue() public view returns (uint256) {
-        // Do not use usdc.balanceOf(address(this)): it includes user fund
-        // deposits held for trading. Only depositLP/withdrawLP change this.
-        return totalStakedUSDC;
+        // Trader funds are liabilities of the LP pool, so exclude their
+        // aggregate internal balance from the USDC held by this contract.
+        return usdc.balanceOf(address(this)) - totalUserBalances;
     }
 
     function getTotalUserFunds() public view returns (uint256) {
@@ -316,7 +316,7 @@ contract OneClickPerpDex is ReentrancyGuard {
     /**
      * @notice Returns the current USDC value of an address's OneClick LP stake.
      * @dev user value = (user ocUSDC / total minted ocUSDC) * total LP
-     *      staking. `getPoolValue` deliberately excludes user fund deposits.
+     *      staking. `getPoolValue` excludes user fund deposits.
      */
     function getUserLPStakingValue(address user) public view returns (uint256) {
         uint256 lpShares = ocUSDC.balanceOf(user);

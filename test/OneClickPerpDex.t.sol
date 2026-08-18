@@ -138,7 +138,7 @@ contract OneClickPerpDexMaxTPTest is Test {
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
     }
 
-    function testPoolValueUsesOnlyStakedUSDC() public {
+    function testPoolValueExcludesTotalUserBalances() public {
         address unregisteredTrader = makeAddr("unregisteredTrader");
         uint256 traderDeposit = 1_000e6;
         usdc.ownerMint(unregisteredTrader, traderDeposit);
@@ -149,6 +149,10 @@ contract OneClickPerpDexMaxTPTest is Test {
         vm.stopPrank();
 
         assertEq(perpDex.getPoolValue(), 100_000_000e6);
+        assertEq(
+            perpDex.getPoolValue(),
+            usdc.balanceOf(address(perpDex)) - perpDex.totalUserBalances()
+        );
         assertEq(perpDex.getUserLPStakingValue(address(this)), 100_000_000e6);
 
         _openLong(0);
@@ -157,8 +161,13 @@ contract OneClickPerpDexMaxTPTest is Test {
         OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
         perpDex.closePosition(trader, positions[0].id, 49_500e8);
 
-        // A trader loss stays outside the staked-USDC accounting.
-        assertEq(perpDex.getPoolValue(), 100_000_000e6);
+        // A trader loss reduces the user-fund liability and increases the
+        // value available to LPs.
+        assertEq(perpDex.getPoolValue(), 100_000_010e6);
+        assertEq(
+            perpDex.getPoolValue(),
+            usdc.balanceOf(address(perpDex)) - perpDex.totalUserBalances()
+        );
         assertEq(perpDex.totalStakedUSDC(), 100_000_000e6);
     }
 

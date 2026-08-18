@@ -330,15 +330,22 @@ contract PerpDex {
     }
 
     /**
-     * @notice Returns the current USDC value of an address's LP position.
-     * @dev This is the amount returned if the address withdraws all of its
-     *      current ppUSDC. It is a current value, not historical deposits.
-    */
-    function getUserLPValue(address user) external view returns (uint256) {
+     * @notice Returns the current USDC value of an address's LP stake.
+     * @dev user value = (user ppUSDC / total minted ppUSDC) * total LP
+     *      staking. Multiplication is performed before division to preserve
+     *      precision. This is a current value, not historical deposits.
+     */
+    function getUserLPStakingValue(address user) public view returns (uint256) {
         uint256 lpShares = ppUSDC.balanceOf(user);
+        uint256 totalMintedppUSDC = ppUSDC.totalSupply();
 
-        if (lpShares == 0) return 0;
-        return (lpShares * getPoolValue()) / ppUSDC.totalSupply();
+        if (lpShares == 0 || totalMintedppUSDC == 0) return 0;
+        return (lpShares * getPoolValue()) / totalMintedppUSDC;
+    }
+
+    /// @notice Backwards-compatible alias for getUserLPStakingValue.
+    function getUserLPValue(address user) external view returns (uint256) {
+        return getUserLPStakingValue(user);
     }
 
     // Helper function to calculate how much ppUSDC user would get for a deposit

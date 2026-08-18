@@ -124,7 +124,25 @@ contract PerpDexTest is Test {
 
     function testFrontendUserLPValueView() public {
         assertEq(perpDex.getUserLPValue(address(this)), 100_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(address(this)), 100_000_000e6);
         assertEq(perpDex.getUserLPValue(trader), 0);
+        assertEq(perpDex.getUserLPStakingValue(trader), 0);
+    }
+
+    function testUserLPStakingValueUsesPpUSDCShareOfLPStaking() public {
+        address secondLP = makeAddr("secondLP");
+        uint256 secondLPDeposit = 50_000_000e6;
+        usdc.ownerMint(secondLP, secondLPDeposit);
+
+        vm.startPrank(secondLP);
+        usdc.approve(address(perpDex), secondLPDeposit);
+        perpDex.depositLP(secondLPDeposit);
+        vm.stopPrank();
+
+        assertEq(perpDex.getPoolValue(), 150_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(address(this)), 100_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(secondLP), secondLPDeposit);
+        assertEq(perpDex.getUserLPStakingValue(trader), 0);
     }
 
     function testOpenRejectsTPAbovePairMaxTP() public {

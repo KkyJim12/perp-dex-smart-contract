@@ -62,6 +62,22 @@ contract OneClickPerpDexMaxTPTest is Test {
         assertEq(perpDex.getocUSDCPrice(), 1e18);
     }
 
+    function testUserLPStakingValueUsesOcUSDCShareOfLPStaking() public {
+        address secondLP = makeAddr("secondLP");
+        uint256 secondLPDeposit = 50_000_000e6;
+        usdc.ownerMint(secondLP, secondLPDeposit);
+
+        vm.startPrank(secondLP);
+        usdc.approve(address(perpDex), secondLPDeposit);
+        perpDex.depositLP(secondLPDeposit);
+        vm.stopPrank();
+
+        assertEq(perpDex.getPoolValue(), 150_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(address(this)), 100_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(secondLP), secondLPDeposit);
+        assertEq(perpDex.getUserLPStakingValue(trader), 0);
+    }
+
     function testOpenRejectsTPAbovePairMaxTP() public {
         perpDex.updatePairMaxTP("BTC_USD", 1e18);
 
@@ -133,6 +149,7 @@ contract OneClickPerpDexMaxTPTest is Test {
         vm.stopPrank();
 
         assertEq(perpDex.getPoolValue(), 100_000_000e6);
+        assertEq(perpDex.getUserLPStakingValue(address(this)), 100_000_000e6);
 
         _openLong(0);
         assertEq(perpDex.getPoolValue(), 100_000_000e6);

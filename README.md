@@ -64,6 +64,20 @@ forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs \
 The signer in `PRIVATE_KEY` must own the target contract. Do not rerun
 configuration against a contract that already contains these pairs.
 
+## Post-deployment owner initialization
+
+After recording `USDC_ADDRESS` and `ONECLICK_PERPDEX_ADDRESS` in the environment
+file, initialize the deployment with:
+
+```bash
+bash script/deploy/initialize-deployment.sh .env
+```
+
+When `DEPLOY_MOCK_USDC=true`, this mints
+`INITIAL_MOCK_USDC_MINT_AMOUNT` MockUSDC (default: 100,000,000 USDC) to the
+deployed owner. It also authorizes that owner as the OneClickPerpDex backend.
+Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
+
 ## LP risk circuit breaker
 
 Both `PerpDex` and `OneClickPerpDex` reserve the maximum possible profit for

@@ -46,12 +46,32 @@ verify-native-staking.bat
 
 ## Initial pair configuration
 
-Trading pairs are not stored in either DEX constructor. Deployment scripts
-load the canonical 37-pair configuration from
-`script/InitialPairConfig.sol` immediately after deployment.
+Trading pairs are not stored in either DEX constructor. After deployment,
+seed the canonical configuration from `script/InitialPairConfig.sol`.
+Currently nine pairs are enabled: BTC, ETH, SOL, BNB, XRP, HYPE, DOGE, XAG,
+and XAU (all `_USD`). Commented-out pairs are not seeded.
 
-To configure contracts that were deployed separately, set the relevant
-address in `.env` and run:
+Set `PRIVATE_KEY`, `RPC_URL`, `CHAIN_ID`, `PERPDEX_ADDRESS`, and
+`ONECLICK_PERPDEX_ADDRESS` in `.env`. Run from macOS/Linux or Git Bash on Windows:
+
+```bash
+# Simulate both contracts without sending transactions.
+bash script/deploy/seed-initial-pairs.sh .env both --dry-run
+
+# Broadcast the initial configuration to both contracts.
+bash script/deploy/seed-initial-pairs.sh .env both
+
+# Seed only one contract (only its address is required).
+bash script/deploy/seed-initial-pairs.sh .env perp
+bash script/deploy/seed-initial-pairs.sh .env oneclick
+```
+
+The runner loads the environment file, checks the RPC chain ID, and uses
+legacy transactions for chain 56. The Foundry scripts check contract code and
+ownership before configuring pairs. Each pair is a separate transaction;
+seeding both contracts is not atomic.
+
+You can also invoke the individual Foundry entry points directly:
 
 ```bash
 forge script script/ConfigureInitialPairs.s.sol:ConfigurePerpDexPairs \

@@ -34,8 +34,9 @@ done
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 
 VERIFIER="etherscan"
-# Forge adds chainid from --chain; adding it here duplicates the query parameter.
-VERIFIER_URL="https://api.etherscan.io/v2/api"
+# Etherscan API V2 requires `chainid` in the request URL.  `--chain` selects
+# Foundry's chain configuration but is not forwarded as this API parameter.
+VERIFIER_URL="https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}"
 VERIFIER_API_KEY="${ETHERSCAN_API_KEY:-}"
 REQUIRES_API_KEY=true
 

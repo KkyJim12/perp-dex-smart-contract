@@ -49,8 +49,9 @@ if [[ "$ONCHAIN_CODE" == "0x" ]]; then
     exit 1
 fi
 
-# Forge adds chainid from --chain; keep the endpoint free of query parameters.
-VERIFIER_URL="https://api.etherscan.io/v2/api"
+# Etherscan API V2 requires `chainid` in the request URL. `--chain` is used by
+# Foundry locally and does not supply this required API query parameter.
+VERIFIER_URL="https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}"
 : "${ETHERSCAN_API_KEY:?Error: ETHERSCAN_API_KEY is required for Etherscan API V2}"
 
 echo "Submitting NativeStaking for SnowScan verification through Etherscan API V2"

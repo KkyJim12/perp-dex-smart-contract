@@ -98,6 +98,25 @@ When `DEPLOY_MOCK_USDC=true`, this mints
 deployed owner. It also authorizes that owner as the OneClickPerpDex backend.
 Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
 
+## Options AMM vault
+
+`OptionsAMM` is an isolated, cash-settled European-options vault. An option
+buyer pays its premium in USDC and the vault takes the short/counterparty
+position. LPs deposit USDC into the vault and receive transferable `opUSDC`
+shares, redeemable pro rata after all open option obligations are settled.
+
+Each option's maximum payout equals its USDC-denominated `contracts` amount;
+the AMM reserves that full amount before accepting the trade and caps aggregate
+reservation at 80% of vault assets. This ensures buyers are fully
+collateralized. LP deposits and withdrawals lock while obligations exist,
+preventing a later LP from capturing (or an early LP from stranding) the
+reserve that belongs to the LPs underwriting those options. Settlement is
+permissionless after expiry using a Pyth price update whose publish time is at
+or after the expiry.
+
+Deploy with `DeployOptionsAMM.s.sol`, set `USDC_ADDRESS`, `PYTH_ADDRESS`, and
+`PRIVATE_KEY`, then create markets with raw Pyth-price strike units.
+
 ## LP risk circuit breaker
 
 Both `PerpDex` and `OneClickPerpDex` reserve the maximum possible profit for

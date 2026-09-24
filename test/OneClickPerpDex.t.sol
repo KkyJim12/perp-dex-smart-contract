@@ -38,6 +38,28 @@ contract OneClickPerpDexMaxTPTest is Test {
         vm.stopPrank();
     }
 
+    function testOpenAtPairMaxLeverageAbove100() public {
+        perpDex.updatePairConfig("BTC_USD", 2000, 50_000e6, 2, 500);
+
+        perpDex.openPosition(trader, "BTC_USD", true, MARGIN, 500, ENTRY_PRICE, 0, 0);
+
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+        assertEq(positions[0].leverage, 500);
+        assertEq(positions[0].size, MARGIN * 500);
+    }
+
+    function testOpenRejectsLeverageAbovePairMaximum() public {
+        perpDex.updatePairConfig("BTC_USD", 2000, 50_000e6, 2, 250);
+
+        vm.expectRevert(OneClickPerpDex.InvalidLeverage.selector);
+        perpDex.openPosition(trader, "BTC_USD", true, MARGIN, 251, ENTRY_PRICE, 0, 0);
+    }
+
+    function testOpenRejectsLeverageBelowPairMinimum() public {
+        vm.expectRevert(OneClickPerpDex.InvalidLeverage.selector);
+        perpDex.openPosition(trader, "BTC_USD", true, MARGIN, 1, ENTRY_PRICE, 0, 0);
+    }
+
     function testOpenWithoutTPDefaultsToPairMaxTP() public {
         perpDex.updatePairMaxTP("BTC_USD", 2e18);
 

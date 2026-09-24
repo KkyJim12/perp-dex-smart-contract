@@ -33,7 +33,6 @@ contract OneClickPerpDex is ReentrancyGuard {
     uint256 public constant ONE = 1e18;
     uint256 public constant WINNING_FEE_BPS = 200; // 2% fee on winning positions only
     uint256 public constant SPREAD_BPS = 0;
-    uint256 public constant MAX_LEVERAGE = 100;
     uint256 public constant MIN_MARGIN = 1e6; // 1 USDC
     // Profit ratios use 18 decimals: 1e18 = 100% profit on position margin.
     uint256 public constant DEFAULT_MAX_TP = 5e18; // 500%
@@ -652,7 +651,6 @@ contract OneClickPerpDex is ReentrancyGuard {
     ) external onlyAuthorizedBackend nonReentrant whenTradingActive {
         require(margin > 0 && leverage > 0, "Invalid margin or leverage");
         require(margin >= MIN_MARGIN, "Margin too small");
-        require(leverage <= MAX_LEVERAGE, "Leverage too high");
         require(entryPrice > 0, "Invalid entry price");
         
         PairInfo storage info = pairInfo[pairs];

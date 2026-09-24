@@ -101,6 +101,10 @@ require_address PERPDEX_ADDRESS
 require_address PYTH_ADDRESS
 require_address OCUSDC_ADDRESS
 require_address ONECLICK_PERPDEX_ADDRESS
+require_address OPUSDC_ADDRESS
+require_address OPTIONS_AMM_ADDRESS
+require_address PMUSDC_ADDRESS
+require_address PREDICTION_MARKET_AMM_ADDRESS
 
 echo -e "${YELLOW}========================================${NC}"
 echo -e "${YELLOW}${NETWORK_NAME} Contract Verification${NC}"
@@ -175,6 +179,7 @@ fi
 
 verify_contract "$PPUSDC_ADDRESS" "src/ppUSDC.sol:ppUSDC"
 verify_contract "$OCUSDC_ADDRESS" "src/ocUSDC.sol:ocUSDC"
+verify_contract "$OPUSDC_ADDRESS" "src/opUSDC.sol:opUSDC"
 
 # PerpDex constructor: (_usdc, _pyth, _ppUSDC)
 PERPDEX_ARGS="$(
@@ -200,6 +205,40 @@ verify_contract \
     "$ONECLICK_PERPDEX_ADDRESS" \
     "src/OneClickPerpDex.sol:OneClickPerpDex" \
     "$ONECLICK_ARGS"
+
+# OptionsAMM constructor: (usdc_, pyth_, opUSDC_)
+OPTIONS_ARGS="$(
+    cast abi-encode \
+        "constructor(address,address,address)" \
+        "$USDC_ADDRESS" \
+        "$PYTH_ADDRESS" \
+        "$OPUSDC_ADDRESS"
+)"
+verify_contract "$OPTIONS_AMM_ADDRESS" "src/OptionsAMM.sol:OptionsAMM" "$OPTIONS_ARGS"
+
+# Read immutable prediction settings from the deployed vault so verification
+# still works if the deployment fee in .env has changed.
+PREDICTION_FEEDS=()
+for index in 0 1 2; do
+    PREDICTION_FEEDS+=("$(cast call "$PREDICTION_MARKET_AMM_ADDRESS" \
+        'priceIds(uint256)(bytes32)' "$index" --rpc-url "$RPC_URL")")
+done
+PREDICTION_FEE="$(cast call "$PREDICTION_MARKET_AMM_ADDRESS" \
+    'feeBps()(uint256)' --rpc-url "$RPC_URL")"
+PREDICTION_ARGS="$(
+    cast abi-encode \
+        "constructor(address,address,bytes32[3],uint256)" \
+        "$USDC_ADDRESS" \
+        "$PYTH_ADDRESS" \
+        "[${PREDICTION_FEEDS[0]},${PREDICTION_FEEDS[1]},${PREDICTION_FEEDS[2]}]" \
+        "$PREDICTION_FEE"
+)"
+verify_contract "$PREDICTION_MARKET_AMM_ADDRESS" \
+    "src/PredictionMarketAMM.sol:PredictionMarketAMM" "$PREDICTION_ARGS"
+
+# pmUSDC is created by PredictionMarketAMM with the vault as its sole argument.
+PMUSDC_ARGS="$(cast abi-encode 'constructor(address)' "$PREDICTION_MARKET_AMM_ADDRESS")"
+verify_contract "$PMUSDC_ADDRESS" "src/pmUSDC.sol:pmUSDC" "$PMUSDC_ARGS"
 
 echo -e "${YELLOW}========================================${NC}"
 echo "Verification complete: ${SUCCESS_COUNT} succeeded, ${FAILURE_COUNT} failed."

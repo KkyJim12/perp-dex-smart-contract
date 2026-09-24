@@ -1,5 +1,31 @@
 # Monad Quick Start Guide
 
+## Deploy and verify all markets
+
+Configure `.env` using `.env.example`, then run:
+
+```bash
+bash script/deploy/deploy-all.sh
+# Copy all printed contract addresses into .env before verification.
+bash script/deploy/verify-all.sh
+```
+
+Deploy-all includes PerpDex, OneClickPerpDex, OptionsAMM with its wired
+`opUSDC` token, and PredictionMarketAMM with its constructor-created `pmUSDC`
+token. All use the same USDC; options and prediction have separate LP vaults.
+Set `DEPLOY_MOCK_USDC=false` and `USDC_ADDRESS` to use existing six-decimal USDC.
+
+Prediction uses the BTC, ETH, and SOL Pyth feed IDs from the canonical initial
+pair configuration. `PREDICTION_FEE_BPS` defaults to 30 (0.3%) and accepts 0–500;
+the fee is fixed at deployment. The configured Pyth oracle must support
+`parsePriceFeedUpdatesUnique`. Create options markets and prediction rounds
+separately after deployment.
+
+Verification requires `OPUSDC_ADDRESS`, `OPTIONS_AMM_ADDRESS`, `PMUSDC_ADDRESS`,
+and `PREDICTION_MARKET_AMM_ADDRESS` alongside the existing contract addresses.
+It reads the prediction feed IDs and fee from the deployed contract and verifies
+both new AMMs and both LP tokens using their respective constructor arguments.
+
 ## Deploy NativeStaking to Avalanche
 
 Create a local `.env` from `.env.example` and configure either Avalanche Fuji

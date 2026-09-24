@@ -7,6 +7,9 @@ import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
+import "../src/OptionsAMM.sol";
+import "../src/opUSDC.sol";
+import "../src/PredictionMarketAMM.sol";
 import "./InitialPairConfig.sol";
 
 contract DeployAll is Script, InitialPairConfig {
@@ -15,13 +18,25 @@ contract DeployAll is Script, InitialPairConfig {
         address ppUSDCAddress,
         address perpDexAddress,
         address ocUSDCAddress,
-        address oneClickPerpDexAddress
+        address oneClickPerpDexAddress,
+        address opUSDCAddress,
+        address optionsAMMAddress,
+        address pmUSDCAddress,
+        address predictionMarketAMMAddress
     ) {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address pythAddress = vm.envAddress("PYTH_ADDRESS");
         
         // Check if we should deploy MockUSDC or use existing USDC
         bool deployMockUSDC = vm.envOr("DEPLOY_MOCK_USDC", true);
+        uint256 predictionFeeBps = vm.envOr("PREDICTION_FEE_BPS", uint256(30));
+        require(predictionFeeBps <= 500, "Prediction fee exceeds 5%");
+        // BTC, ETH, SOL, in PredictionMarketAMM.Asset order; same feeds as InitialPairConfig.
+        bytes32[3] memory predictionFeeds = [
+            bytes32(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43),
+            bytes32(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace),
+            bytes32(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
+        ];
 
         console.log("===================================");
         console.log("Complete PerpDex Deployment");
@@ -104,6 +119,33 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("ocUSDC configured with OneClick PerpDex address");
         console.log("");
 
+        // ================================================================
+        // STEP 8: Deploy and configure the isolated options vault
+        // ================================================================
+        console.log("=== Step 8: Deploy Options AMM ===");
+        opUSDC optionsLpToken = new opUSDC();
+        opUSDCAddress = address(optionsLpToken);
+        OptionsAMM options = new OptionsAMM(usdcAddress, pythAddress, opUSDCAddress);
+        optionsAMMAddress = address(options);
+        optionsLpToken.setOptionsAMM(optionsAMMAddress);
+        console.log("opUSDC:", opUSDCAddress);
+        console.log("OptionsAMM:", optionsAMMAddress);
+        console.log("");
+
+        // ================================================================
+        // STEP 9: Deploy prediction vault (creates its own pmUSDC token)
+        // ================================================================
+        console.log("=== Step 9: Deploy Prediction Market AMM ===");
+        PredictionMarketAMM prediction = new PredictionMarketAMM(
+            usdcAddress, pythAddress, predictionFeeds, predictionFeeBps
+        );
+        predictionMarketAMMAddress = address(prediction);
+        pmUSDCAddress = address(prediction.shareToken());
+        console.log("PredictionMarketAMM:", predictionMarketAMMAddress);
+        console.log("pmUSDC:", pmUSDCAddress);
+        console.log("Prediction fee (bps):", predictionFeeBps);
+        console.log("");
+
         vm.stopBroadcast();
 
         console.log("Initial trading pairs were not added during deployment.");
@@ -140,6 +182,16 @@ contract DeployAll is Script, InitialPairConfig {
         console.log(ocUSDCAddress);
         console.log("OneClick PerpDex:");
         console.log(oneClickPerpDexAddress);
+        console.log("");
+
+        console.log("--- Options AMM System ---");
+        console.log("opUSDC Token:", opUSDCAddress);
+        console.log("OptionsAMM:", optionsAMMAddress);
+        console.log("");
+
+        console.log("--- Prediction Market System ---");
+        console.log("pmUSDC Token:", pmUSDCAddress);
+        console.log("PredictionMarketAMM:", predictionMarketAMMAddress);
         console.log("");
 
         // ================================================================
@@ -229,8 +281,18 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("PERPDEX_ADDRESS=", perpDexAddress);
         console.log("OCUSDC_ADDRESS=", ocUSDCAddress);
         console.log("ONECLICK_PERPDEX_ADDRESS=", oneClickPerpDexAddress);
+        console.log("OPUSDC_ADDRESS=", opUSDCAddress);
+        console.log("OPTIONS_AMM_ADDRESS=", optionsAMMAddress);
+        console.log("PMUSDC_ADDRESS=", pmUSDCAddress);
+        console.log("PREDICTION_MARKET_AMM_ADDRESS=", predictionMarketAMMAddress);
         console.log("");
+        console.log("Verify all contracts (including options and prediction):");
+        console.log("bash script/deploy/verify-all.sh");
+        console.log("Create options markets and prediction rounds separately after deployment.");
 
-        return (usdcAddress, ppUSDCAddress, perpDexAddress, ocUSDCAddress, oneClickPerpDexAddress);
+        return (
+            usdcAddress, ppUSDCAddress, perpDexAddress, ocUSDCAddress, oneClickPerpDexAddress,
+            opUSDCAddress, optionsAMMAddress, pmUSDCAddress, predictionMarketAMMAddress
+        );
     }
 }

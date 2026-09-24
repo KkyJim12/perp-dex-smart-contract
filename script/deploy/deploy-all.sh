@@ -17,7 +17,10 @@ echo ""
 
 # Load environment variables
 if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    set -a
+    # shellcheck disable=SC1091
+    source <(tr -d '\r' < .env)
+    set +a
     echo -e "${GREEN}✓ Loaded .env file${NC}"
 else
     echo -e "${RED}✗ .env file not found${NC}"
@@ -72,6 +75,10 @@ echo "  2. ppUSDC (Main PerpDex LP Token)"
 echo "  3. Main PerpDex"
 echo "  4. ocUSDC (OneClick PerpDex LP Token)"
 echo "  5. OneClick PerpDex"
+echo "  6. opUSDC (Options AMM LP Token)"
+echo "  7. Options AMM"
+echo "  8. Prediction Market AMM and its pmUSDC LP Token"
+echo "     Prediction fee: ${PREDICTION_FEE_BPS:-30} bps; BTC/ETH/SOL feeds"
 echo ""
 read -p "Continue with deployment? (y/n) " -n 1 -r
 echo ""
@@ -89,7 +96,7 @@ echo ""
 
 # Run deployment
 forge script script/DeployAll.s.sol \
-    --rpc-url $RPC_URL \
+    --rpc-url "$RPC_URL" \
     --broadcast \
     --slow \
     -vvv
@@ -104,7 +111,8 @@ if [ $? -eq 0 ]; then
     echo -e "${YELLOW}Next steps:${NC}"
     echo "1. Copy the deployed addresses from above to your .env file"
     echo "2. Authorize backend address for OneClick PerpDex"
-    echo "3. Verify contracts on block explorer"
+    echo "3. Verify contracts: bash script/deploy/verify-all.sh"
+    echo "4. Create options markets and prediction rounds separately"
     echo ""
 else
     echo ""

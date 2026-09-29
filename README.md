@@ -116,8 +116,8 @@ Set `PREDICTION_MARKET_AMM_ADDRESS` in `.env` alongside `PRIVATE_KEY`, `RPC_URL`
 and `CHAIN_ID`, then seed the empty prediction registry:
 
 ```bash
-bash script/deploy/seed-initial-pairs.sh .env prediction --dry-run
-bash script/deploy/seed-initial-pairs.sh .env prediction
+bash script/deploy/seed-prediction-pairs.sh .env --dry-run
+bash script/deploy/seed-prediction-pairs.sh .env
 ```
 
 The `prediction` target seeds BTC_USD, ETH_USD, and SOL_USD (IDs 0, 1, 2).

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick] [--dry-run]
+# Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction] [--dry-run]
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/../.."
 
 if [[ "${1:-}" == "--help" || "$#" -gt 3 ]]; then
-    echo "Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick] [--dry-run]"
+    echo "Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction] [--dry-run]"
     exit 0
 fi
 
@@ -17,7 +17,8 @@ case "$TARGET" in
     both) ENTRYPOINT=ConfigureInitialPairs ;;
     perp) ENTRYPOINT=ConfigurePerpDexPairs ;;
     oneclick) ENTRYPOINT=ConfigureOneClickPairs ;;
-    *) echo "Error: target must be both, perp, or oneclick." >&2; exit 1 ;;
+    prediction) ENTRYPOINT=ConfigurePredictionPairs ;;
+    *) echo "Error: target must be both, perp, oneclick, or prediction." >&2; exit 1 ;;
 esac
 if [[ -n "$MODE" && "$MODE" != "--dry-run" ]]; then
     echo "Error: third argument must be --dry-run or omitted to broadcast." >&2
@@ -43,11 +44,15 @@ done
 : "${PRIVATE_KEY:?Error: PRIVATE_KEY is required}"
 : "${RPC_URL:?Error: RPC_URL is required}"
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
-if [[ "$TARGET" != "oneclick" ]]; then
+if [[ "$TARGET" == "both" || "$TARGET" == "perp" ]]; then
     : "${PERPDEX_ADDRESS:?Error: PERPDEX_ADDRESS is required}"
 fi
-if [[ "$TARGET" != "perp" ]]; then
+if [[ "$TARGET" == "both" || "$TARGET" == "oneclick" ]]; then
     : "${ONECLICK_PERPDEX_ADDRESS:?Error: ONECLICK_PERPDEX_ADDRESS is required}"
+fi
+
+if [[ "$TARGET" == "prediction" ]]; then
+    : "${PREDICTION_MARKET_AMM_ADDRESS:?Error: PREDICTION_MARKET_AMM_ADDRESS is required}"
 fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"

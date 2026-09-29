@@ -15,15 +15,15 @@ Deploy-all includes PerpDex, OneClickPerpDex, OptionsAMM with its wired
 token. All use the same USDC; options and prediction have separate LP vaults.
 Set `DEPLOY_MOCK_USDC=false` and `USDC_ADDRESS` to use existing six-decimal USDC.
 
-Prediction uses the BTC, ETH, and SOL Pyth feed IDs from the canonical initial
-pair configuration. `PREDICTION_FEE_BPS` defaults to 30 (0.3%) and accepts 0–500;
+Prediction deploys with an empty pair registry. Seed BTC, ETH, and SOL using
+the prediction seed target below. `PREDICTION_FEE_BPS` defaults to 30 (0.3%) and accepts 0–500;
 the fee is fixed at deployment. The configured Pyth oracle must support
 `parsePriceFeedUpdatesUnique`. Create options markets and prediction rounds
 separately after deployment.
 
 Verification requires `OPUSDC_ADDRESS`, `OPTIONS_AMM_ADDRESS`, `PMUSDC_ADDRESS`,
 and `PREDICTION_MARKET_AMM_ADDRESS` alongside the existing contract addresses.
-It reads the prediction feed IDs and fee from the deployed contract and verifies
+It reads the prediction fee from the deployed contract and verifies
 both new AMMs and both LP tokens using their respective constructor arguments.
 
 ## Deploy NativeStaking to Avalanche
@@ -109,6 +109,52 @@ forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs \
 
 The signer in `PRIVATE_KEY` must own the target contract. Do not rerun
 configuration against a contract that already contains these pairs.
+
+## Prediction market pairs
+
+Set `PREDICTION_MARKET_AMM_ADDRESS` in `.env` alongside `PRIVATE_KEY`, `RPC_URL`,
+and `CHAIN_ID`, then seed the empty prediction registry:
+
+```bash
+bash script/deploy/seed-initial-pairs.sh .env prediction --dry-run
+bash script/deploy/seed-initial-pairs.sh .env prediction
+```
+
+The `prediction` target seeds BTC_USD, ETH_USD, and SOL_USD (IDs 0, 1, 2).
+The `both` target still refers to the two perpetual DEX contracts.
+The seed script requires an empty registry and rejects reruns. Each pair is a
+separate transaction; if broadcasting stops partway through, resume the Foundry
+broadcast or add the missing pairs manually rather than restarting the seed.
+
+Pairs use a shared network-specific `PYTH_ADDRESS` oracle contract and distinct
+32-byte Pyth price feed IDs. Canonical IDs in `script/InitialPairConfig.sol` were
+checked against the [Pyth Hermes feed catalog](https://hermes.pyth.network/v2/price_feeds):
+
+| Pair | Pyth price feed ID |
+| --- | --- |
+| BTC_USD | `0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43` |
+| ETH_USD | `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` |
+| SOL_USD | `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
+
+The owner can manage pairs later (export the environment variables in the shell):
+
+```bash
+cast send "$PREDICTION_MARKET_AMM_ADDRESS" 'addPair(string,bytes32)' \
+    'NEW_USD' "$NEW_PYTH_FEED_ID" --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY"
+cast send "$PREDICTION_MARKET_AMM_ADDRESS" 'removePair(uint256)' \
+    2 --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY"
+```
+
+`pairCount()` includes removed pairs; enumerate `pairs(id)` to read
+`(name, priceId, active)`. IDs are never shifted or reused. Names are case-sensitive,
+and active names and feeds must be unique. Removal disables new rounds. Existing
+rounds can still open, trade, resolve, and pay claims using their original feed.
+Re-adding a removed pair allocates a new ID.
+
+Integrations must use `createMarket(uint256 pairId,uint64 duration,uint64 startTime,uint256 depth)`
+and `Market.pairId` instead of the former asset enum. The constructor is now
+`constructor(address usdc,address pyth,uint256 feeBps)`. This non-upgradeable
+contract requires a new deployment to use the changed interface.
 
 ## Post-deployment owner initialization
 

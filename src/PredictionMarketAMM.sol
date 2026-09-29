@@ -32,11 +32,16 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     uint64 public constant TRADING_CUTOFF = 5;
     uint256 public constant MAX_INVENTORY = type(uint128).max;
 
-    enum Asset { BTC, ETH, SOL }
     enum Status { Scheduled, Trading, Resolved }
 
+    struct Pair {
+        string name;
+        bytes32 priceId;
+        bool active;
+    }
+
     struct Market {
-        Asset asset;
+        uint256 pairId;
         Status status;
         uint64 startTime;
         uint64 endTime;
@@ -53,7 +58,9 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     IPredictionPyth public immutable pyth;
     pmUSDC public immutable shareToken;
     uint256 public immutable feeBps;
-    bytes32[3] public priceIds;
+    Pair[] public pairs;
+    mapping(bytes32 => bool) private activeNames;
+    mapping(bytes32 => bool) private activeFeeds;
     Market[] private markets;
     mapping(bytes32 => bool) public scheduled;
     mapping(uint256 => mapping(address => uint256)) public upBalance;
@@ -63,7 +70,9 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     uint256 public totalFees;
     bool public tradingPaused;
 
-    event MarketCreated(uint256 indexed marketId, Asset indexed asset, uint64 startTime, uint64 endTime, uint256 depth);
+    event PairAdded(uint256 indexed pairId, string name, bytes32 priceId);
+    event PairRemoved(uint256 indexed pairId);
+    event MarketCreated(uint256 indexed marketId, uint256 indexed pairId, uint64 startTime, uint64 endTime, uint256 depth);
     event MarketOpened(uint256 indexed marketId, uint256 price);
     event MarketResolved(uint256 indexed marketId, uint256 price, bool upWins, uint256 liability);
     event Bought(uint256 indexed marketId, address indexed trader, bool up, uint256 assets, uint256 shares, uint256 fee);
@@ -73,17 +82,12 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     event Withdrawn(address indexed lp, uint256 assets, uint256 shares);
     event TradingPaused(bool paused);
 
-    constructor(address usdc_, address pyth_, bytes32[3] memory feeds, uint256 feeBps_) Ownable(msg.sender) {
+    constructor(address usdc_, address pyth_, uint256 feeBps_) Ownable(msg.sender) {
         require(usdc_.code.length > 0 && pyth_.code.length > 0, "Invalid contract");
         require(IERC20Metadata(usdc_).decimals() == 6, "USDC must have 6 decimals");
         require(feeBps_ <= 500, "Fee exceeds 5%");
-        for (uint256 i; i < 3; ++i) {
-            require(feeds[i] != bytes32(0), "Invalid feed");
-            for (uint256 j; j < i; ++j) require(feeds[i] != feeds[j], "Duplicate feed");
-        }
         usdc = IERC20(usdc_);
         pyth = IPredictionPyth(pyth_);
-        priceIds = feeds;
         feeBps = feeBps_;
         shareToken = new pmUSDC(address(this));
     }
@@ -91,24 +95,54 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     function marketCount() external view returns (uint256) { return markets.length; }
     function getMarket(uint256 id) external view returns (Market memory) { return markets[id]; }
 
+    /// @notice Total pair IDs ever assigned, including removed pairs. IDs are never reused.
+    function pairCount() external view returns (uint256) { return pairs.length; }
+    function priceIds(uint256 pairId) external view returns (bytes32) { return pairs[pairId].priceId; }
+
+    function addPair(string calldata name, bytes32 priceId) external onlyOwner returns (uint256 pairId) {
+        require(bytes(name).length > 0, "Invalid name");
+        require(priceId != bytes32(0), "Invalid feed");
+        bytes32 nameHash = keccak256(bytes(name));
+        require(!activeNames[nameHash], "Duplicate pair");
+        require(!activeFeeds[priceId], "Duplicate feed");
+        activeNames[nameHash] = true;
+        activeFeeds[priceId] = true;
+        pairId = pairs.length;
+        pairs.push(Pair(name, priceId, true));
+        emit PairAdded(pairId, name, priceId);
+    }
+
+    /// @notice Disable new rounds without changing the oracle or lifecycle of existing rounds.
+    function removePair(uint256 pairId) external onlyOwner {
+        require(pairId < pairs.length, "Invalid pair");
+        Pair storage pair = pairs[pairId];
+        require(pair.active, "Pair inactive");
+        pair.active = false;
+        activeNames[keccak256(bytes(pair.name))] = false;
+        activeFeeds[pair.priceId] = false;
+        emit PairRemoved(pairId);
+    }
+
     function setTradingPaused(bool paused) external onlyOwner {
         tradingPaused = paused;
         emit TradingPaused(paused);
     }
 
     /// @notice Schedule one UTC-aligned round per asset/duration/start. Depth sets the initial 50/50 curve.
-    function createMarket(Asset asset, uint64 duration, uint64 startTime, uint256 depth)
+    function createMarket(uint256 pairId, uint64 duration, uint64 startTime, uint256 depth)
         external onlyOwner returns (uint256 id)
     {
+        require(pairId < pairs.length, "Invalid pair");
+        require(pairs[pairId].active, "Pair inactive");
         require(duration == 5 minutes || duration == 15 minutes || duration == 1 hours || duration == 1 days, "Invalid duration");
         require(startTime > block.timestamp && startTime % duration == 0, "Invalid start");
         require(depth > 0 && depth <= MAX_INVENTORY, "Invalid depth");
-        bytes32 key = keccak256(abi.encode(asset, duration, startTime));
+        bytes32 key = keccak256(abi.encode(pairId, duration, startTime));
         require(!scheduled[key], "Round exists");
         scheduled[key] = true;
         id = markets.length;
-        markets.push(Market(asset, Status.Scheduled, startTime, startTime + duration, 0, 0, depth, depth, 0, 0, false));
-        emit MarketCreated(id, asset, startTime, startTime + duration, depth);
+        markets.push(Market(pairId, Status.Scheduled, startTime, startTime + duration, 0, 0, depth, depth, 0, 0, false));
+        emit MarketCreated(id, pairId, startTime, startTime + duration, depth);
     }
 
     /// @notice Anyone can open a scheduled market with the first Pyth update at/after its start.
@@ -116,7 +150,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         Market storage m = markets[id];
         require(m.status == Status.Scheduled, "Not scheduled");
         require(block.timestamp >= m.startTime && block.timestamp <= m.startTime + ORACLE_WINDOW, "Opening window closed");
-        m.openingPrice = _boundaryPrice(m.asset, m.startTime, data);
+        m.openingPrice = _boundaryPrice(m.pairId, m.startTime, data);
         m.status = Status.Trading;
         emit MarketOpened(id, m.openingPrice);
     }
@@ -241,7 +275,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     function resolveMarket(uint256 id, bytes[] calldata data) external payable nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Trading && block.timestamp >= m.endTime, "Not resolvable");
-        uint256 price = _boundaryPrice(m.asset, m.endTime, data);
+        uint256 price = _boundaryPrice(m.pairId, m.endTime, data);
         m.closingPrice = price;
         m.upWins = price >= m.openingPrice;
         m.status = Status.Resolved;
@@ -291,11 +325,11 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         require(usdc.balanceOf(address(this)) - beforeBalance == assets, "Unsupported transfer fee");
     }
 
-    function _boundaryPrice(Asset asset, uint64 timestamp, bytes[] calldata data) private returns (uint256) {
+    function _boundaryPrice(uint256 pairId, uint64 timestamp, bytes[] calldata data) private returns (uint256) {
         uint256 fee = pyth.getUpdateFee(data);
         require(msg.value == fee, "Incorrect Pyth fee");
         bytes32[] memory ids = new bytes32[](1);
-        ids[0] = priceIds[uint256(asset)];
+        ids[0] = pairs[pairId].priceId;
         PythStructs.PriceFeed[] memory feeds = pyth.parsePriceFeedUpdatesUnique{value: fee}(data, ids, timestamp, timestamp + ORACLE_WINDOW);
         require(feeds.length == 1 && feeds[0].id == ids[0], "Wrong feed");
         PythStructs.Price memory p = feeds[0].price;

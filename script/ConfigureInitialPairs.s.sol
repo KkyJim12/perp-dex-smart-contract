@@ -52,3 +52,17 @@ contract ConfigureOneClickPairs is Script, InitialPairConfig {
         vm.stopBroadcast();
     }
 }
+
+/// @notice Seed BTC/USD, ETH/USD and SOL/USD on an owner-controlled prediction vault.
+contract ConfigurePredictionPairs is Script, InitialPairConfig {
+    function run() external {
+        uint256 privateKey = vm.envUint("PRIVATE_KEY");
+        PredictionMarketAMM amm = PredictionMarketAMM(vm.envAddress("PREDICTION_MARKET_AMM_ADDRESS"));
+        require(address(amm).code.length > 0, "No prediction AMM at target address");
+        require(amm.owner() == vm.addr(privateKey), "Signer is not prediction owner");
+        require(amm.pairCount() == 0, "Prediction pairs already initialized");
+        vm.startBroadcast(privateKey);
+        _configurePredictionPairs(amm);
+        vm.stopBroadcast();
+    }
+}

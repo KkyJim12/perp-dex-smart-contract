@@ -218,19 +218,13 @@ verify_contract "$OPTIONS_AMM_ADDRESS" "src/OptionsAMM.sol:OptionsAMM" "$OPTIONS
 
 # Read immutable prediction settings from the deployed vault so verification
 # still works if the deployment fee in .env has changed.
-PREDICTION_FEEDS=()
-for index in 0 1 2; do
-    PREDICTION_FEEDS+=("$(cast call "$PREDICTION_MARKET_AMM_ADDRESS" \
-        'priceIds(uint256)(bytes32)' "$index" --rpc-url "$RPC_URL")")
-done
 PREDICTION_FEE="$(cast call "$PREDICTION_MARKET_AMM_ADDRESS" \
     'feeBps()(uint256)' --rpc-url "$RPC_URL")"
 PREDICTION_ARGS="$(
     cast abi-encode \
-        "constructor(address,address,bytes32[3],uint256)" \
+        "constructor(address,address,uint256)" \
         "$USDC_ADDRESS" \
         "$PYTH_ADDRESS" \
-        "[${PREDICTION_FEEDS[0]},${PREDICTION_FEEDS[1]},${PREDICTION_FEEDS[2]}]" \
         "$PREDICTION_FEE"
 )"
 verify_contract "$PREDICTION_MARKET_AMM_ADDRESS" \

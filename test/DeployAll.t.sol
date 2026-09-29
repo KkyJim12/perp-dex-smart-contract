@@ -65,9 +65,7 @@ contract DeployAllTest is Test {
         assertEq(address(vault.shareToken()), predictionShares);
         assertEq(pmUSDC(predictionShares).vault(), prediction);
         assertEq(vault.feeBps(), fee);
-        assertEq(vault.priceIds(0), 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43);
-        assertEq(vault.priceIds(1), 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace);
-        assertEq(vault.priceIds(2), 0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d);
+        assertEq(vault.pairCount(), 0);
         assertEq(vault.marketCount(), 0);
 
         assertTrue(optionsShares != perpShares && optionsShares != oneClickShares);

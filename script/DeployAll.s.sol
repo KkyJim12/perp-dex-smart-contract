@@ -31,13 +31,6 @@ contract DeployAll is Script, InitialPairConfig {
         bool deployMockUSDC = vm.envOr("DEPLOY_MOCK_USDC", true);
         uint256 predictionFeeBps = vm.envOr("PREDICTION_FEE_BPS", uint256(30));
         require(predictionFeeBps <= 500, "Prediction fee exceeds 5%");
-        // BTC, ETH, SOL, in PredictionMarketAMM.Asset order; same feeds as InitialPairConfig.
-        bytes32[3] memory predictionFeeds = [
-            bytes32(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43),
-            bytes32(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace),
-            bytes32(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
-        ];
-
         console.log("===================================");
         console.log("Complete PerpDex Deployment");
         console.log("===================================");
@@ -137,7 +130,7 @@ contract DeployAll is Script, InitialPairConfig {
         // ================================================================
         console.log("=== Step 9: Deploy Prediction Market AMM ===");
         PredictionMarketAMM prediction = new PredictionMarketAMM(
-            usdcAddress, pythAddress, predictionFeeds, predictionFeeBps
+            usdcAddress, pythAddress, predictionFeeBps
         );
         predictionMarketAMMAddress = address(prediction);
         pmUSDCAddress = address(prediction.shareToken());

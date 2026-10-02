@@ -235,6 +235,18 @@ forge script script/ConfigureInitialPairs.s.sol:ConfigurePerpDexPairs --rpc-url 
 forge script script/ConfigureInitialPairs.s.sol:ConfigureOneClickPairs --rpc-url "$RPC_URL" --broadcast
 ```
 
+## Verify deployed contracts
+
+Set the deployed addresses, `RPC_URL`, and matching `CHAIN_ID` in `.env`, then run:
+
+```bash
+bash script/deploy/verify-all.sh
+```
+
+The script uses Blockscout for Robinhood Chain mainnet (`4663`) and testnet
+(`46630`), with no Etherscan API key required. Monad uses Sourcify; Base and
+Avalanche use Etherscan API V2 and require `ETHERSCAN_API_KEY`.
+
 ## 🚀 Deploy to Monad in 3 Steps
 
 ### **Step 1: Setup Environment**

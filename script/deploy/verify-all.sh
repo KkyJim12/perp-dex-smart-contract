@@ -41,6 +41,20 @@ VERIFIER_API_KEY="${ETHERSCAN_API_KEY:-}"
 REQUIRES_API_KEY=true
 
 case "$CHAIN_ID" in
+    4663)
+        NETWORK_NAME="${NETWORK_NAME:-Robinhood Chain}"
+        EXPLORER_URL="${EXPLORER_URL:-https://robinhoodchain.blockscout.com}"
+        VERIFIER="blockscout"
+        VERIFIER_URL="https://robinhoodchain.blockscout.com/api/"
+        REQUIRES_API_KEY=false
+        ;;
+    46630)
+        NETWORK_NAME="${NETWORK_NAME:-Robinhood Chain Testnet}"
+        EXPLORER_URL="${EXPLORER_URL:-https://explorer.testnet.chain.robinhood.com}"
+        VERIFIER="blockscout"
+        VERIFIER_URL="https://explorer.testnet.chain.robinhood.com/api/"
+        REQUIRES_API_KEY=false
+        ;;
     143)
         NETWORK_NAME="${NETWORK_NAME:-Monad Mainnet}"
         EXPLORER_URL="${EXPLORER_URL:-https://monadvision.com}"
@@ -150,7 +164,11 @@ verify_contract() {
     )
 
     if [[ "$REQUIRES_API_KEY" == true ]]; then
-        args+=(--etherscan-api-key "$VERIFIER_API_KEY" --watch)
+        args+=(--etherscan-api-key "$VERIFIER_API_KEY")
+    fi
+
+    if [[ "$VERIFIER" != "sourcify" ]]; then
+        args+=(--watch)
     fi
 
     if [[ -n "$constructor_args" ]]; then

@@ -13,6 +13,8 @@ contract InitializeDeployment is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployedOwner = vm.addr(deployerPrivateKey);
+        address backendAddress = vm.envAddress("BACKEND_ADDRESS");
+        require(backendAddress != address(0), "Invalid backend address");
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         OneClickPerpDex oneClickPerpDex = OneClickPerpDex(
             payable(vm.envAddress("ONECLICK_PERPDEX_ADDRESS"))
@@ -46,9 +48,9 @@ contract InitializeDeployment is Script {
             console.log("Skipping MockUSDC mint: DEPLOY_MOCK_USDC is not true.");
         }
 
-        oneClickPerpDex.authorizeBackend(deployedOwner, true);
-        console.log("Deployed owner authorized as OneClick backend:");
-        console.log(deployedOwner);
+        oneClickPerpDex.authorizeBackend(backendAddress, true);
+        console.log("Configured backend authorized for OneClick:");
+        console.log(backendAddress);
 
         vm.stopBroadcast();
     }

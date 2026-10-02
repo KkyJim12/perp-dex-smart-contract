@@ -30,6 +30,12 @@ done
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 : "${USDC_ADDRESS:?Error: USDC_ADDRESS is required}"
 : "${ONECLICK_PERPDEX_ADDRESS:?Error: ONECLICK_PERPDEX_ADDRESS is required}"
+: "${BACKEND_ADDRESS:?Error: BACKEND_ADDRESS is required}"
+
+if [[ ! "$BACKEND_ADDRESS" =~ ^0x[0-9a-fA-F]{40}$ || "$BACKEND_ADDRESS" == "0x0000000000000000000000000000000000000000" ]]; then
+    echo "Error: BACKEND_ADDRESS must be a valid, nonzero Ethereum address." >&2
+    exit 1
+fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
@@ -38,7 +44,7 @@ if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
 fi
 
 if [[ "${INITIALIZE_CONFIRM:-}" != "yes" ]]; then
-    read -r -p "Mint MockUSDC when enabled and authorize the deployer as OneClick backend? (y/N) " REPLY
+    read -r -p "Mint MockUSDC when enabled and authorize $BACKEND_ADDRESS as OneClick backend? (y/N) " REPLY
     if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
         echo "Initialization cancelled. Set INITIALIZE_CONFIRM=yes for non-interactive use."
         exit 0

@@ -158,7 +158,7 @@ contract requires a new deployment to use the changed interface.
 
 ## Post-deployment owner initialization
 
-After recording `USDC_ADDRESS` and `ONECLICK_PERPDEX_ADDRESS` in the environment
+After recording `USDC_ADDRESS`, `ONECLICK_PERPDEX_ADDRESS`, and `BACKEND_ADDRESS` in the environment
 file, initialize the deployment with:
 
 ```bash
@@ -167,7 +167,9 @@ bash script/deploy/initialize-deployment.sh .env
 
 When `DEPLOY_MOCK_USDC=true`, this mints
 `INITIAL_MOCK_USDC_MINT_AMOUNT` MockUSDC (default: 100,000,000 USDC) to the
-deployed owner. It also authorizes that owner as the OneClickPerpDex backend.
+deployed owner. It authorizes the nonzero `BACKEND_ADDRESS` from the environment
+file as the OneClickPerpDex backend. `PRIVATE_KEY` must still belong to the owner
+who can perform initialization.
 Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
 
 ## Options AMM vault
@@ -243,9 +245,36 @@ Set the deployed addresses, `RPC_URL`, and matching `CHAIN_ID` in `.env`, then r
 bash script/deploy/verify-all.sh
 ```
 
-The script uses Blockscout for Robinhood Chain mainnet (`4663`) and testnet
-(`46630`), with no Etherscan API key required. Monad uses Sourcify; Base and
+The script uses Sourcify for Robinhood Chain mainnet (`4663`) and testnet
+(`46630`), with no API key required. It waits for the verification result
+before reporting success and clears unrelated Etherscan keys for Sourcify calls.
+Monad uses its configured Sourcify endpoint; Base and
 Avalanche use Etherscan API V2 and require `ETHERSCAN_API_KEY`.
+
+Robinhood's public Blockscout API can return a Cloudflare HTML challenge instead
+of JSON. Sourcify verification works independently of that API. To verify
+directly on Robinhood mainnet's Blockscout explorer, set `BLOCKSCOUT_API_KEY`
+in `.env` to a PRO API key from https://dev.blockscout.com; the script then uses
+the documented `https://api.blockscout.com/v2/api?chain_id=4663` gateway.
+The script supplies the key in the gateway's `apikey` query parameter because
+Foundry's Blockscout provider omits it from the submitted form. Keys are
+URL-encoded and redacted from console output.
+Sourcify verification does not confirm that Blockscout has imported the contract
+or displays a verified badge. A browser import or manual verification can be
+used for the explorer separately.
+
+For `pmUSDC`, export the input locally with:
+
+```bash
+mkdir -p cache/verification
+forge verify-contract <PMUSDC_ADDRESS> src/pmUSDC.sol:pmUSDC \
+    --show-standard-json-input --num-of-optimizations 1 --via-ir \
+    > cache/verification/pmUSDC.standard-json.json
+```
+
+Select compiler `v0.8.20+commit.a1b79de6` and contract `src/pmUSDC.sol:pmUSDC`.
+Its constructor argument is the deployed `PREDICTION_MARKET_AMM_ADDRESS`,
+ABI-encoded as `constructor(address)`.
 
 ## 🚀 Deploy to Monad in 3 Steps
 

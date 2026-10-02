@@ -33,6 +33,18 @@ done
 : "${RPC_URL:?Error: RPC_URL is required}"
 : "${CHAIN_ID:?Error: CHAIN_ID is required}"
 
+url_encode() {
+    local LC_ALL=C value=$1 encoded='' character escaped i
+    for (( i=0; i<${#value}; i++ )); do
+        character=${value:i:1}
+        case "$character" in
+            [a-zA-Z0-9.~_-]) encoded+=$character ;;
+            *) printf -v escaped '%%%02X' "'$character"; encoded+=$escaped ;;
+        esac
+    done
+    printf '%s' "$encoded"
+}
+
 VERIFIER="etherscan"
 # Etherscan API V2 requires `chainid` in the request URL.  `--chain` selects
 # Foundry's chain configuration but is not forwarded as this API parameter.
@@ -44,15 +56,15 @@ case "$CHAIN_ID" in
     4663)
         NETWORK_NAME="${NETWORK_NAME:-Robinhood Chain}"
         EXPLORER_URL="${EXPLORER_URL:-https://robinhoodchain.blockscout.com}"
-        VERIFIER="blockscout"
-        VERIFIER_URL="https://robinhoodchain.blockscout.com/api/"
+        VERIFIER="sourcify"
+        VERIFIER_URL="https://sourcify.dev/server/"
         REQUIRES_API_KEY=false
         ;;
     46630)
         NETWORK_NAME="${NETWORK_NAME:-Robinhood Chain Testnet}"
         EXPLORER_URL="${EXPLORER_URL:-https://explorer.testnet.chain.robinhood.com}"
-        VERIFIER="blockscout"
-        VERIFIER_URL="https://explorer.testnet.chain.robinhood.com/api/"
+        VERIFIER="sourcify"
+        VERIFIER_URL="https://sourcify.dev/server/"
         REQUIRES_API_KEY=false
         ;;
     143)
@@ -82,6 +94,21 @@ case "$CHAIN_ID" in
         EXPLORER_URL="${EXPLORER_URL:-Not configured}"
         ;;
 esac
+VERIFIER_DISPLAY_URL="$VERIFIER_URL"
+
+# The explorer's public API can reject CLI requests with a Cloudflare challenge.
+# Sourcify supports both Robinhood networks without an API key. On mainnet, a
+# Blockscout PRO key selects its documented verification gateway instead.
+if [[ "$CHAIN_ID" == "4663" && -n "${BLOCKSCOUT_API_KEY:-}" ]]; then
+    VERIFIER="blockscout"
+    VERIFIER_API_KEY="$BLOCKSCOUT_API_KEY"
+    # Foundry's Blockscout provider omits apikey from its submitted form, even
+    # when --etherscan-api-key is set. The PRO gateway authenticates the query.
+    VERIFIER_API_KEY_ENCODED="$(url_encode "$VERIFIER_API_KEY")"
+    VERIFIER_URL="https://api.blockscout.com/v2/api?chain_id=${CHAIN_ID}&apikey=${VERIFIER_API_KEY_ENCODED}"
+    VERIFIER_DISPLAY_URL="https://api.blockscout.com/v2/api?chain_id=${CHAIN_ID}&apikey=[redacted]"
+    REQUIRES_API_KEY=true
+fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
 if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
@@ -125,7 +152,7 @@ echo -e "${YELLOW}${NETWORK_NAME} Contract Verification${NC}"
 echo -e "${YELLOW}========================================${NC}"
 echo "Chain ID:     $CHAIN_ID"
 echo "Verifier:     $VERIFIER"
-echo "Verifier URL: $VERIFIER_URL"
+echo "Verifier URL: $VERIFIER_DISPLAY_URL"
 echo ""
 
 if [[ "$REQUIRES_API_KEY" == true && -z "$VERIFIER_API_KEY" ]]; then
@@ -136,6 +163,15 @@ fi
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
 
+redact_verifier_output() {
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line=${line//"$VERIFIER_API_KEY"/[redacted]}
+        line=${line//"$VERIFIER_API_KEY_ENCODED"/[redacted]}
+        printf '%s\n' "$line"
+    done
+}
+
 verify_contract() {
     local address=$1
     local contract=$2
@@ -145,6 +181,7 @@ verify_contract() {
     echo -e "${YELLOW}Verifying ${name}...${NC}"
     echo "Address:  $address"
     echo "Contract: $contract"
+    echo "Provider: $VERIFIER"
 
     if ! has_code "$address"; then
         echo -e "${RED}Failed: no contract bytecode at ${address}.${NC}"
@@ -167,8 +204,14 @@ verify_contract() {
         args+=(--etherscan-api-key "$VERIFIER_API_KEY")
     fi
 
-    if [[ "$VERIFIER" != "sourcify" ]]; then
+    if [[ "$VERIFIER" != "sourcify" || "$CHAIN_ID" == "4663" || "$CHAIN_ID" == "46630" ]]; then
         args+=(--watch)
+    fi
+
+    if [[ "$VERIFIER" == "blockscout" ]]; then
+        # Skip the preliminary getabi request, which can be Cloudflare-blocked.
+        # Submission and status polling still depend on the explorer API.
+        args+=(--skip-is-verified-check)
     fi
 
     if [[ -n "$constructor_args" ]]; then
@@ -177,8 +220,20 @@ verify_contract() {
 
     args+=("$address" "$contract")
 
-    if forge "${args[@]}"; then
-        echo -e "${GREEN}Verified ${name}.${NC}"
+    local verification_exit=0
+    if [[ "$VERIFIER" == "sourcify" ]]; then
+        # Foundry can select Etherscan when an unrelated Etherscan key is set,
+        # even with --verifier sourcify. Preserve an explicitly empty key in
+        # this child process so dotenv cannot restore it from .env.
+        ETHERSCAN_API_KEY= VERIFIER_API_KEY= forge "${args[@]}" || verification_exit=$?
+    elif [[ "$VERIFIER" == "blockscout" ]]; then
+        forge "${args[@]}" 2>&1 | redact_verifier_output || verification_exit=$?
+    else
+        forge "${args[@]}" || verification_exit=$?
+    fi
+
+    if (( verification_exit == 0 )); then
+        echo -e "${GREEN}Verified ${name} on ${VERIFIER}.${NC}"
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else
         echo -e "${RED}Failed to verify ${name}.${NC}"
@@ -254,6 +309,11 @@ verify_contract "$PMUSDC_ADDRESS" "src/pmUSDC.sol:pmUSDC" "$PMUSDC_ARGS"
 
 echo -e "${YELLOW}========================================${NC}"
 echo "Verification complete: ${SUCCESS_COUNT} succeeded, ${FAILURE_COUNT} failed."
+echo "Provider: ${VERIFIER}"
+if [[ "$VERIFIER" == "sourcify" && ( "$CHAIN_ID" == "4663" || "$CHAIN_ID" == "46630" ) ]]; then
+    echo "Verification records: https://sourcify.dev/server/v2/contract/${CHAIN_ID}/<address>"
+    echo "Blockscout's verified badge requires a separate import or verification."
+fi
 echo "Explorer: ${EXPLORER_URL}"
 echo -e "${YELLOW}========================================${NC}"
 

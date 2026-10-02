@@ -208,7 +208,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         uint256 maxLeverage,
         uint256 maxTP
     ) internal {
-        _validatePairMaxTP(maxTP, maxLeverage);
+        _validatePairMaxTP(maxTP);
         pairInfo[pairs] = PairInfo(
             pairs,
             true,
@@ -574,15 +574,8 @@ contract OneClickPerpDex is ReentrancyGuard {
         }
     }
 
-    function _validatePairMaxTP(
-        uint256 maxTP,
-        uint256 maxLeverage
-    ) internal pure {
+    function _validatePairMaxTP(uint256 maxTP) internal pure {
         require(maxTP > 0, "Invalid maxTP");
-        require(
-            maxTP >= (maxLeverage * ONE) / 1000,
-            "maxTP too low for max leverage"
-        );
     }
 
     function _calculateMaxTakeProfitPrice(
@@ -630,9 +623,6 @@ contract OneClickPerpDex is ReentrancyGuard {
         uint256 takeProfitPnl = (size * priceDifference) / entryPrice;
         uint256 maxPnl = (margin * info.maxTP) / ONE;
         require(takeProfitPnl <= maxPnl, "TP exceeds pair maxTP");
-
-        uint256 minDistance = entryPrice / 1000;
-        require(priceDifference >= minDistance, "TP too close to entry price");
     }
 
     // ------------------------------------------------------------------
@@ -844,16 +834,7 @@ contract OneClickPerpDex is ReentrancyGuard {
                     }
                 }
 
-                uint256 minDistance = currentPrice / 1000;
-                uint256 tpDistance = pos.isLong
-                    ? effectiveNewTP - currentPrice
-                    : currentPrice - effectiveNewTP;
-                require(tpDistance >= minDistance, "TP too close to current price");
                 if (newSL > 0) {
-                    uint256 slDistance = pos.isLong
-                        ? currentPrice - newSL
-                        : newSL - currentPrice;
-                    require(slDistance >= minDistance, "SL too close to current price");
                     require(effectiveNewTP != newSL, "TP and SL cannot be the same price");
                 }
                 
@@ -1257,7 +1238,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         ) revert InvalidLeverage();
         require(oiRatio > 0, "Invalid OI ratio");
         if (maxPositionSize == 0) revert PositionSizeTooLarge();
-        _validatePairMaxTP(info.maxTP, maxLeverage);
+        _validatePairMaxTP(info.maxTP);
 
         // Update total ratio
         totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
@@ -1281,7 +1262,7 @@ contract OneClickPerpDex is ReentrancyGuard {
     ) external onlyOwner {
         PairInfo storage info = pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
-        _validatePairMaxTP(maxTP, info.maxLeverage);
+        _validatePairMaxTP(maxTP);
 
         info.maxTP = maxTP;
 

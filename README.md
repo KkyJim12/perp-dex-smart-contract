@@ -213,6 +213,11 @@ and validates the edit against the updated feed price. `OneClickPerpDex`
 requires its authorized backend to provide the current price as the final
 argument to `modifyTpSl`.
 
+TP/SL levels are trigger prices for the bot and have no minimum distance from
+the entry or current price when opening or editing positions. TP profit caps
+and directional validation still apply. Pair `maxTP` must be positive but has
+no minimum tied to maximum leverage.
+
 ## Direct deployment
 
 `DeployAll`, `DeployWithppUSDC`, `DeployOneClick`, and the Kubchain testnet

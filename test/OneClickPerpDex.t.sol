@@ -155,9 +155,73 @@ contract OneClickPerpDexMaxTPTest is Test {
         assertEq(perpDex.userBalances(trader), (MARGIN * 10) + 98e6);
     }
 
-    function testPairMaxTPSetterRejectsUnusableValue() public {
-        vm.expectRevert("maxTP too low for max leverage");
+    function testFuzzPairMaxTPAllowsCloseDefaultAtMaxLeverage(bool isLong) public {
+        perpDex.addPair("ETH_USD", 100, 50_000e6, 2, 100, 0.05e18);
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
+        perpDex.updatePairConfig("BTC_USD", 2000, 50_000e6, 2, 200);
+
+        perpDex.openPosition(trader, "BTC_USD", isLong, MARGIN, 200, ENTRY_PRICE, 0, 0);
+
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+        uint256 priceDelta = (ENTRY_PRICE * 0.05e18) / (1e18 * 200);
+        assertLt(priceDelta, ENTRY_PRICE / 1000);
+        assertEq(positions[0].takeProfit, isLong ? ENTRY_PRICE + priceDelta : ENTRY_PRICE - priceDelta);
+    }
+
+    function testPairMaxTPSetterStillRejectsZero() public {
+        vm.expectRevert("Invalid maxTP");
+        perpDex.updatePairMaxTP("BTC_USD", 0);
+    }
+
+    function testFuzzOpenAndTriggerCloseTpSl(bool isLong, bool hitTP, uint64 distanceSeed) public {
+        uint256 distance = bound(uint256(distanceSeed), 1, ENTRY_PRICE / 1000 - 1);
+        uint256 tp = isLong ? ENTRY_PRICE + distance : ENTRY_PRICE - distance;
+        uint256 sl = isLong ? ENTRY_PRICE - distance : ENTRY_PRICE + distance;
+
+        perpDex.openPosition(trader, "BTC_USD", isLong, MARGIN, LEVERAGE, ENTRY_PRICE, tp, sl);
+
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+        assertFalse(positions[0].isClosed);
+        assertEq(positions[0].takeProfit, tp);
+        assertEq(positions[0].stopLoss, sl);
+
+        vm.expectRevert("No TP/SL triggered");
+        perpDex.triggerTpSl(trader, positions[0].id, ENTRY_PRICE);
+
+        uint256 triggerPrice = hitTP ? tp : sl;
+        perpDex.triggerTpSl(trader, positions[0].id, triggerPrice);
+
+        positions = perpDex.getUserPositions(trader);
+        assertTrue(positions[0].isClosed);
+        assertEq(positions[0].closePrice, triggerPrice);
+    }
+
+    function testFuzzModifyAndTriggerCloseTpSl(
+        bool isLong, bool hitTP, bool priceMoved, uint64 distanceSeed
+    ) public {
+        if (isLong) _openLong(0);
+        else _openShort(0);
+        OneClickPerpDex.Position[] memory positions = perpDex.getUserPositions(trader);
+
+        uint256 currentPrice = priceMoved
+            ? (isLong ? ENTRY_PRICE + 1_000e8 : ENTRY_PRICE - 1_000e8)
+            : ENTRY_PRICE;
+        uint256 distance = bound(uint256(distanceSeed), 1, currentPrice / 1000 - 1);
+        uint256 tp = isLong ? currentPrice + distance : currentPrice - distance;
+        uint256 sl = isLong ? currentPrice - distance : currentPrice + distance;
+        perpDex.modifyTpSl(trader, positions[0].id, tp, sl, currentPrice);
+
+        positions = perpDex.getUserPositions(trader);
+        assertFalse(positions[0].isClosed);
+        assertEq(positions[0].takeProfit, tp);
+        assertEq(positions[0].stopLoss, sl);
+
+        uint256 triggerPrice = hitTP ? tp : sl;
+        perpDex.triggerTpSl(trader, positions[0].id, triggerPrice);
+
+        positions = perpDex.getUserPositions(trader);
+        assertTrue(positions[0].isClosed);
+        assertEq(positions[0].closePrice, triggerPrice);
     }
 
     function testPoolValueExcludesTotalUserBalances() public {

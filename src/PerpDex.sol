@@ -243,7 +243,7 @@ contract PerpDex {
         uint256 maxLeverage,
         uint256 maxTP
     ) internal {
-        _validatePairMaxTP(maxTP, maxLeverage);
+        _validatePairMaxTP(maxTP);
         pairInfo[pairs] = PairInfo(
             pairs,
             pythTokenId,
@@ -749,17 +749,8 @@ contract PerpDex {
         return priceDelta >= entryPrice ? 1 : entryPrice - priceDelta;
     }
 
-    function _validatePairMaxTP(
-        uint256 maxTP,
-        uint256 maxLeverage
-    ) internal pure {
+    function _validatePairMaxTP(uint256 maxTP) internal pure {
         require(maxTP > 0, "Invalid maxTP");
-        // The default TP must remain at least 0.1% away from entry at the
-        // pair's highest leverage, matching the TP dust-distance rule.
-        require(
-            maxTP >= (maxLeverage * ONE) / 1000,
-            "maxTP too low for max leverage"
-        );
     }
 
     function _validateTakeProfitCap(
@@ -874,21 +865,6 @@ contract PerpDex {
         // Additional validation: TP and SL cannot be the same
         if (stopLoss > 0) {
             require(effectiveTakeProfit != stopLoss, "TP and SL cannot be the same price");
-        }
-
-        // Additional validation: Ensure reasonable distance from entry price (prevent dust orders)
-        uint256 minDistance = oraclePrice / 1000; // 0.1% minimum distance
-        if (isLong) {
-            require(effectiveTakeProfit >= oraclePrice + minDistance, "TP too close to entry price");
-        } else {
-            require(effectiveTakeProfit <= oraclePrice - minDistance, "TP too close to entry price");
-        }
-        if (stopLoss > 0) {
-            if (isLong) {
-                require(stopLoss <= oraclePrice - minDistance, "SL too close to entry price");
-            } else {
-                require(stopLoss >= oraclePrice + minDistance, "SL too close to entry price");
-            }
         }
 
         require(usdc.transferFrom(msg.sender, address(this), margin));
@@ -1057,21 +1033,6 @@ contract PerpDex {
                 // Additional validation: TP and SL cannot be the same
                 if (newSL > 0) {
                     require(effectiveNewTP != newSL, "TP and SL cannot be the same price");
-                }
-
-                // Additional validation: Ensure reasonable distance from current price (prevent dust orders)
-                uint256 minDistance = currentPrice / 1000; // 0.1% minimum distance
-                if (pos.isLong) {
-                    require(effectiveNewTP >= currentPrice + minDistance, "TP too close to current price");
-                } else {
-                    require(effectiveNewTP <= currentPrice - minDistance, "TP too close to current price");
-                }
-                if (newSL > 0) {
-                    if (pos.isLong) {
-                        require(newSL <= currentPrice - minDistance, "SL too close to current price");
-                    } else {
-                        require(newSL >= currentPrice + minDistance, "SL too close to current price");
-                    }
                 }
 
                 // Update the TP/SL values
@@ -1444,7 +1405,7 @@ contract PerpDex {
         require(minLeverage <= maxLeverage, "Min leverage > max leverage");
         require(oiRatio > 0, "Invalid OI ratio");
         require(maxPositionSize > 0, "Invalid position size");
-        _validatePairMaxTP(info.maxTP, maxLeverage);
+        _validatePairMaxTP(info.maxTP);
 
         // Update total ratio
         totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
@@ -1469,7 +1430,7 @@ contract PerpDex {
     ) external onlyOwner {
         PairInfo storage info = pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
-        _validatePairMaxTP(maxTP, info.maxLeverage);
+        _validatePairMaxTP(maxTP);
 
         info.maxTP = maxTP;
 

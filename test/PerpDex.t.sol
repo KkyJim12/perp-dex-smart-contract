@@ -204,11 +204,82 @@ contract PerpDexTest is Test {
         assertEq(usdc.balanceOf(trader), (MARGIN * 9) + 198e6);
     }
 
-    function testPairMaxTPSetterRejectsUnusableValue() public {
-        // At 100x max leverage this would put default TP less than 0.1%
-        // from entry, conflicting with the contract's minimum TP distance.
-        vm.expectRevert("maxTP too low for max leverage");
+    function testFuzzPairMaxTPAllowsCloseDefaultAtMaxLeverage(bool isLong) public {
+        perpDex.addPair("ETH_USD", bytes32(uint256(2)), 20, 50_000e6, 2, 100, 0.05e18);
         perpDex.updatePairMaxTP("BTC_USD", 0.05e18);
+        perpDex.updatePairConfig("BTC_USD", 20, 50_000e6, 2, 200);
+
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, MARGIN, 200, new bytes[](0), 0, 0);
+
+        (, , uint256 takeProfit) = _positionData(0);
+        uint256 priceDelta = (ENTRY_PRICE * 0.05e18) / (1e18 * 200);
+        assertLt(priceDelta, ENTRY_PRICE / 1000);
+        assertEq(takeProfit, isLong ? ENTRY_PRICE + priceDelta : ENTRY_PRICE - priceDelta);
+    }
+
+    function testPairMaxTPSetterStillRejectsZero() public {
+        vm.expectRevert("Invalid maxTP");
+        perpDex.updatePairMaxTP("BTC_USD", 0);
+    }
+
+    function testFuzzOpenAndTriggerCloseTpSl(bool isLong, bool hitTP, uint64 distanceSeed) public {
+        uint256 distance = bound(uint256(distanceSeed), 1, ENTRY_PRICE / 1000 - 1);
+        uint256 tp = isLong ? ENTRY_PRICE + distance : ENTRY_PRICE - distance;
+        uint256 sl = isLong ? ENTRY_PRICE - distance : ENTRY_PRICE + distance;
+
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, MARGIN, LEVERAGE, new bytes[](0), tp, sl);
+
+        (bytes32 positionId, bool isClosed, , uint256 storedTP, uint256 storedSL) = _triggerData();
+        assertFalse(isClosed);
+        assertEq(storedTP, tp);
+        assertEq(storedSL, sl);
+
+        vm.expectRevert("No TP/SL triggered");
+        perpDex.triggerTpSl(trader, positionId, new bytes[](0));
+
+        uint256 triggerPrice = hitTP ? tp : sl;
+        mockPyth.setPrice(triggerPrice);
+        perpDex.triggerTpSl(trader, positionId, new bytes[](0));
+
+        (, isClosed, triggerPrice, , ) = _triggerData();
+        assertTrue(isClosed);
+        assertEq(triggerPrice, hitTP ? tp : sl);
+    }
+
+    function testFuzzModifyAndTriggerCloseTpSl(
+        bool isLong, bool hitTP, bool priceMoved, uint64 distanceSeed
+    ) public {
+        if (isLong) _openLong(0);
+        else _openShort(0);
+        (bytes32 positionId, , ) = _positionData(0);
+
+        uint256 currentPrice = priceMoved
+            ? (isLong ? ENTRY_PRICE + 1_000e8 : ENTRY_PRICE - 1_000e8)
+            : ENTRY_PRICE;
+        uint256 distance = bound(uint256(distanceSeed), 1, currentPrice / 1000 - 1);
+        uint256 tp = isLong ? currentPrice + distance : currentPrice - distance;
+        uint256 sl = isLong ? currentPrice - distance : currentPrice + distance;
+        bytes[] memory updateData = new bytes[](1);
+        updateData[0] = abi.encode(currentPrice);
+
+        vm.prank(trader);
+        perpDex.modifyTpSl(positionId, tp, sl, updateData);
+
+        (, bool isClosed, , uint256 storedTP, uint256 storedSL) = _triggerData();
+        assertFalse(isClosed);
+        assertEq(storedTP, tp);
+        assertEq(storedSL, sl);
+        assertEq(mockPyth.updateCallCount(), 2);
+
+        uint256 triggerPrice = hitTP ? tp : sl;
+        mockPyth.setPrice(triggerPrice);
+        perpDex.triggerTpSl(trader, positionId, new bytes[](0));
+
+        (, isClosed, triggerPrice, , ) = _triggerData();
+        assertTrue(isClosed);
+        assertEq(triggerPrice, hitTP ? tp : sl);
     }
 
     function testWorstCaseProfitCapLimitsExposureToThirtyPercentOfPool() public {
@@ -315,6 +386,29 @@ contract PerpDexTest is Test {
         vm.prank(trader);
         vm.expectRevert("Long TP must be above current price");
         perpDex.modifyTpSl(positionId, 52_000e8, 0, priceUpdateData);
+    }
+
+    function _triggerData() internal view returns (
+        bytes32 id, bool isClosed, uint256 closePrice, uint256 takeProfit, uint256 stopLoss
+    ) {
+        (
+            id,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            isClosed,
+            closePrice,
+            ,
+            ,
+            ,
+            ,
+            takeProfit,
+            stopLoss
+        ) = perpDex.positions(trader, 0);
     }
 
     function _openLong(uint256 takeProfit) internal {

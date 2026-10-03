@@ -16,7 +16,7 @@ token. All use the same USDC; options and prediction have separate LP vaults.
 Set `DEPLOY_MOCK_USDC=false` and `USDC_ADDRESS` to use existing six-decimal USDC.
 
 Prediction deploys with an empty pair registry. Seed BTC, ETH, and SOL using
-the prediction seed target below. `PREDICTION_FEE_BPS` defaults to 30 (0.3%) and accepts 0–500;
+the prediction seed target below. `PREDICTION_FEE_BPS` defaults to 300 (3%) and accepts 0–500;
 the fee is fixed at deployment. The configured Pyth oracle must support
 `parsePriceFeedUpdatesUnique`. Create options markets and prediction rounds
 separately after deployment.
@@ -120,7 +120,7 @@ bash script/deploy/seed-prediction-pairs.sh .env --dry-run
 bash script/deploy/seed-prediction-pairs.sh .env
 ```
 
-The `prediction` target seeds BTC_USD, ETH_USD, and SOL_USD (IDs 0, 1, 2).
+The `prediction` target seeds BTC, ETH, and SOL (IDs 0, 1, 2).
 The `both` target still refers to the two perpetual DEX contracts.
 The seed script requires an empty registry and rejects reruns. Each pair is a
 separate transaction; if broadcasting stops partway through, resume the Foundry
@@ -132,9 +132,9 @@ checked against the [Pyth Hermes feed catalog](https://hermes.pyth.network/v2/pr
 
 | Pair | Pyth price feed ID |
 | --- | --- |
-| BTC_USD | `0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43` |
-| ETH_USD | `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` |
-| SOL_USD | `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
+| BTC | `0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43` |
+| ETH | `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` |
+| SOL | `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 
 The owner can manage pairs later (export the environment variables in the shell):
 
@@ -148,13 +148,104 @@ cast send "$PREDICTION_MARKET_AMM_ADDRESS" 'removePair(uint256)' \
 `pairCount()` includes removed pairs; enumerate `pairs(id)` to read
 `(name, priceId, active)`. IDs are never shifted or reused. Names are case-sensitive,
 and active names and feeds must be unique. Removal disables new rounds. Existing
-rounds can still open, trade, resolve, and pay claims using their original feed.
+rounds can still open, trade, resolve, and automatically pay winners using their original feed.
 Re-adding a removed pair allocates a new ID.
 
-Integrations must use `createMarket(uint256 pairId,uint64 duration,uint64 startTime,uint256 depth)`
+Integrations must use `createMarket(uint256 pairId,uint64 duration,uint64 startTime,uint256 volatilityBps)`
 and `Market.pairId` instead of the former asset enum. The constructor is now
 `constructor(address usdc,address pyth,uint256 feeBps)`. This non-upgradeable
 contract requires a new deployment to use the changed interface.
+
+## Buy-only prediction vault
+
+`PredictionMarketAMM` takes the counterparty side of every bet. Users pay USDC
+and receive an internal, nontransferable balance representing their fixed gross
+winning payout. There is no `sell`, `quoteSell`, or `claim` function. LPs receive
+transferable `pmUSDC` shares and own the vault's realized profit or loss.
+
+The win threshold remains the round's opening Pyth price: Up wins when the
+closing price is greater than or equal to the opening price; Down wins otherwise.
+Each purchase uses the current price to calculate odds, and its payout remains
+fixed even if prices or later quotes change.
+
+The owner sets annualized volatility when scheduling a round, between 100 and
+50,000 basis points (1%-500%; `10_000` means 100%). It cannot change during the
+round. The pricing model uses the following symmetric rational sigmoid:
+
+```text
+S = current price; K = round opening price
+sigma = volatilityBps / 10_000
+t = seconds remaining / (365 days)
+z = (S/K - 1) / (sigma * sqrt(t))
+pUp = (1 + z/sqrt(1 + z*z)) / 2
+pDown = 1 - pUp
+fee = ceil(stake * feeBps / 10_000)
+winning payout = floor((stake - fee) / pChosen)
+gross multiplier = winning payout / stake
+```
+
+For a 100 USDC bet at the opening price, either direction has probability 50%.
+With the default 3% edge, the winning payout is **194 USDC (1.94x)**, including
+the stake. An estimated 25% outcome pays about **3.88x**, and a 75% outcome
+about **1.2933x**. The vault keeps losing stakes and pays winners from its assets.
+The edge is an expected return only when the model probabilities match actual
+outcomes. This is a heuristic odds model, not a calibrated statistical forecast;
+volatility must be calibrated per asset before production use. The vault can
+lose money on individual rounds or through incorrect pricing.
+
+Trades outside 1%-95% model probability are rejected rather than having their
+odds clamped. This bounds the payout to 97x at a 3% edge. Tiny trades that cannot
+return more than their stake after integer rounding are also rejected. Quotes
+vary with time remaining, so use `minShares` and `deadline` to protect execution.
+
+The updated buy interface is:
+
+```solidity
+buy(uint256 marketId, bool up, uint256 assets, uint256 currentPrice,
+    uint256 minShares, uint256 deadline, bytes[] priceUpdateData)
+```
+
+`assets` and `minShares` use six USDC decimals; `currentPrice` uses 18 decimals.
+Fetch signed updates from Pyth Hermes and send exactly `pyth.getUpdateFee(data)`
+as native currency. The contract updates Pyth, reads the market's original feed,
+checks freshness (at most five seconds), confidence, exponent, and publish time,
+and requires the normalized oracle price to equal `currentPrice`. Supplying an
+arbitrary price cannot change executable odds. `quoteBuy(id, up, assets, price)`
+returns `(winningPayout, fee)`; `winProbability(id, up, price)` returns the model
+probability scaled by `1e18`. Quote prices are caller-supplied estimates; buys
+verify them against Pyth. Pyth's current-price integration uses
+[`updatePriceFeeds`](https://api-reference.pyth.network/price-feeds/evm/updatePriceFeeds)
+followed by `getPriceNoOlderThan`; round boundaries still require the first
+update at/after the boundary through `parsePriceFeedUpdatesUnique`.
+
+Anyone can call `resolveMarket(id, boundaryUpdateData)` after expiry. A backend
+keeper must submit this transaction for timely settlement; the contract does
+not initiate transactions itself. Resolution verifies the boundary price and
+transfers USDC directly to every winner in that same transaction, clears both
+winning and losing balances, and releases the market's collateral reservation.
+No user action is required to receive winnings. Resolution also works when new
+trading is paused and cannot pay a market twice.
+
+There are at most **128 distinct bettors per round**, bounding the automatic
+transfer loop. Existing bettors may add bets at the limit. Integrations should
+check `traderCount(id)`; capacity can fill before the trading cutoff. Resolution
+gas must be budgeted for the full round and measured against the target chain
+and actual USDC implementation. If USDC is paused or blocks a winner's address,
+the entire settlement reverts atomically and must be retried after transfers
+are permitted. Removing claims means a blocked recipient can delay all payouts
+for that round; balances and reserves are preserved on failure.
+
+The vault reserves the maximum of aggregate Up and Down payouts for each open
+round and caps total reservations at 80% of USDC assets. LP deposits and
+withdrawals remain locked while any exposed round is unresolved. This prevents
+changes to the LP set while its profit/loss remains unknown. Vault profit/loss
+is `stakes received - winning payouts`; retained fees are part of this amount,
+not guaranteed realized profit. No external derivatives hedge is executed.
+
+This changes the market struct, creation parameter, buy/quote interfaces, and
+events. Redeploy the non-upgradeable contract and update integrations. Set
+`PREDICTION_FEE_BPS=300` in an existing environment file to select the 3% edge;
+deployment defaults do not override an explicitly configured older value.
 
 ## Post-deployment owner initialization
 

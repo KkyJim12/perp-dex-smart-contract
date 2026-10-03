@@ -29,7 +29,7 @@ contract DeployAll is Script, InitialPairConfig {
         
         // Check if we should deploy MockUSDC or use existing USDC
         bool deployMockUSDC = vm.envOr("DEPLOY_MOCK_USDC", true);
-        uint256 predictionFeeBps = vm.envOr("PREDICTION_FEE_BPS", uint256(30));
+        uint256 predictionFeeBps = vm.envOr("PREDICTION_FEE_BPS", uint256(300));
         require(predictionFeeBps <= 500, "Prediction fee exceeds 5%");
         console.log("===================================");
         console.log("Complete PerpDex Deployment");

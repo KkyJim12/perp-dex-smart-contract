@@ -78,7 +78,7 @@ echo "  5. OneClick PerpDex"
 echo "  6. opUSDC (Options AMM LP Token)"
 echo "  7. Options AMM"
 echo "  8. Prediction Market AMM and its pmUSDC LP Token"
-echo "     Prediction fee: ${PREDICTION_FEE_BPS:-30} bps; BTC/ETH/SOL feeds"
+echo "     Prediction edge: ${PREDICTION_FEE_BPS:-300} bps; BTC/ETH/SOL feeds"
 echo ""
 read -p "Continue with deployment? (y/n) " -n 1 -r
 echo ""

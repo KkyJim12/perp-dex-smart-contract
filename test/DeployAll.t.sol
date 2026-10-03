@@ -17,7 +17,7 @@ contract DeployAllTest is Test {
         script = DeployAll(deployCode("DeployAll.s.sol:DeployAll"));
         vm.setEnv("PRIVATE_KEY", "1");
         vm.setEnv("PYTH_ADDRESS", vm.toString(pyth));
-        vm.setEnv("PREDICTION_FEE_BPS", "30");
+        vm.setEnv("PREDICTION_FEE_BPS", "300");
         vm.etch(pyth, hex"00");
         vm.deal(vm.addr(1), 100 ether);
     }
@@ -26,7 +26,7 @@ contract DeployAllTest is Test {
     // state, which is not reverted with Foundry's per-test EVM snapshots.
     function testDeployAllConfigurations() public {
         vm.setEnv("DEPLOY_MOCK_USDC", "true");
-        _checkDeployment(address(0), 30);
+        _checkDeployment(address(0), 300);
 
         MockUSDC existing = new MockUSDC();
         vm.setEnv("DEPLOY_MOCK_USDC", "false");

@@ -9,10 +9,25 @@ import {ConfigurePredictionPairs} from "../script/ConfigureInitialPairs.s.sol";
 
 contract PredictionPairsMockPyth {
     bytes32 public expectedId;
-    function setExpectedId(bytes32 id) external { expectedId = id; }
-    function getUpdateFee(bytes[] calldata) external pure returns (uint256) { return 0; }
+
+    function setExpectedId(bytes32 id) external {
+        expectedId = id;
+    }
+
+    function getUpdateFee(bytes[] calldata) external pure returns (uint256) {
+        return 0;
+    }
+    function updatePriceFeeds(bytes[] calldata) external payable {}
+
+    function getPriceNoOlderThan(bytes32 id, uint256) external view returns (PythStructs.Price memory) {
+        require(id == expectedId, "Unexpected feed");
+        return PythStructs.Price(100, 0, 0, block.timestamp);
+    }
+
     function parsePriceFeedUpdatesUnique(bytes[] calldata, bytes32[] calldata ids, uint64 minTime, uint64)
-        external payable returns (PythStructs.PriceFeed[] memory feeds)
+        external
+        payable
+        returns (PythStructs.PriceFeed[] memory feeds)
     {
         require(ids.length == 1 && ids[0] == expectedId, "Unexpected feed");
         feeds = new PythStructs.PriceFeed[](1);
@@ -46,7 +61,7 @@ contract PredictionMarketPairsTest is Test {
         (, feed, active) = amm.pairs(2);
         assertEq(feed, bytes32(uint256(3)));
         assertTrue(active);
-        uint256 market = amm.createMarket(5, 300, 300, 1_000e6);
+        uint256 market = amm.createMarket(5, 300, 300, 10_000);
         assertEq(amm.getMarket(market).pairId, 5);
     }
 
@@ -73,17 +88,17 @@ contract PredictionMarketPairsTest is Test {
         vm.expectRevert("Invalid pair");
         amm.removePair(1);
         vm.expectRevert("Invalid pair");
-        amm.createMarket(1, 300, 300, 1_000e6);
+        amm.createMarket(1, 300, 300, 10_000);
         amm.removePair(0);
         vm.expectRevert("Pair inactive");
         amm.removePair(0);
         vm.expectRevert("Pair inactive");
-        amm.createMarket(0, 300, 300, 1_000e6);
+        amm.createMarket(0, 300, 300, 10_000);
     }
 
-    function testRemovedPairCanOpenTradeResolveAndClaimWithOriginalFeed() public {
+    function testRemovedPairCanOpenTradeResolveAndPayWithOriginalFeed() public {
         amm.addPair("BTC_USD", BTC);
-        uint256 id = amm.createMarket(0, 300, 300, 1_000e6);
+        uint256 id = amm.createMarket(0, 300, 300, 10_000);
         amm.removePair(0);
         amm.addPair("BTC_USD", bytes32(uint256(2)));
         pyth.setExpectedId(BTC);
@@ -92,18 +107,18 @@ contract PredictionMarketPairsTest is Test {
         amm.deposit(10_000e6, 0);
         vm.warp(300);
         amm.openMarket(id, new bytes[](0));
-        uint256 shares = amm.buy(id, true, 100e6, 0, block.timestamp);
+        uint256 shares = amm.buy(id, true, 100e6, 100e18, 0, block.timestamp, new bytes[](0));
         vm.warp(600);
-        amm.resolveMarket(id, new bytes[](0));
         uint256 beforeBalance = usdc.balanceOf(address(this));
-        assertEq(amm.claim(id, address(this)), shares);
+        amm.resolveMarket(id, new bytes[](0));
         assertEq(usdc.balanceOf(address(this)), beforeBalance + shares);
         assertEq(amm.reservedPayout(), 0);
         assertEq(amm.unresolvedExposureMarkets(), 0);
     }
 
     function testSeedScriptAddsCanonicalPairsAndRejectsRerun() public {
-        ConfigurePredictionPairs script = ConfigurePredictionPairs(deployCode("ConfigureInitialPairs.s.sol:ConfigurePredictionPairs"));
+        ConfigurePredictionPairs script =
+            ConfigurePredictionPairs(deployCode("ConfigureInitialPairs.s.sol:ConfigurePredictionPairs"));
         vm.setEnv("PRIVATE_KEY", "1");
         vm.setEnv("PREDICTION_MARKET_AMM_ADDRESS", vm.toString(address(amm)));
         vm.expectRevert("Signer is not prediction owner");
@@ -114,13 +129,13 @@ contract PredictionMarketPairsTest is Test {
         script.run();
         assertEq(amm.pairCount(), 3);
         (string memory name,, bool active) = amm.pairs(0);
-        assertEq(name, "BTC_USD");
+        assertEq(name, "BTC");
         assertTrue(active);
         (name,, active) = amm.pairs(1);
-        assertEq(name, "ETH_USD");
+        assertEq(name, "ETH");
         assertTrue(active);
         (name,, active) = amm.pairs(2);
-        assertEq(name, "SOL_USD");
+        assertEq(name, "SOL");
         assertTrue(active);
         assertEq(amm.priceIds(0), 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43);
         assertEq(amm.priceIds(1), 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace);

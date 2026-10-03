@@ -14,13 +14,17 @@ import {pmUSDC} from "./pmUSDC.sol";
 /// @dev The pinned Pyth SDK predates this method. The deployed oracle MUST support it.
 interface IPredictionPyth {
     function getUpdateFee(bytes[] calldata data) external view returns (uint256);
+    function updatePriceFeeds(bytes[] calldata data) external payable;
+    function getPriceNoOlderThan(bytes32 id, uint256 age) external view returns (PythStructs.Price memory);
     function parsePriceFeedUpdatesUnique(bytes[] calldata data, bytes32[] calldata ids, uint64 minTime, uint64 maxTime)
-        external payable returns (PythStructs.PriceFeed[] memory);
+        external
+        payable
+        returns (PythStructs.PriceFeed[] memory);
 }
 
-/// @notice Binary constant-product AMM. The USDC vault underwrites traders; pmUSDC owns vault P/L.
-/// @dev Cash and outcome shares have 6 decimals; winning shares redeem 1:1 for USDC.
-///      Virtual outcome inventories price trades; actual USDC backs the worst possible payout.
+/// @notice Buy-only binary prediction vault. The vault is every bettor's counterparty.
+/// @dev Cash and outcome balances have 6 decimals; balances are fixed USDC payouts on a win.
+///      Price/time/volatility odds include a vault edge and actual USDC backs the worst payout.
 ///      This is a collateral hedge, not an external BTC/ETH/SOL derivatives hedge.
 contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -30,9 +34,18 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     uint256 public constant MAX_CONFIDENCE_BPS = 100;
     uint64 public constant ORACLE_WINDOW = 30;
     uint64 public constant TRADING_CUTOFF = 5;
-    uint256 public constant MAX_INVENTORY = type(uint128).max;
+    uint256 public constant WAD = 1e18;
+    uint256 public constant YEAR = 365 days;
+    uint256 public constant MAX_PRICE_AGE = 5;
+    uint256 public constant MAX_TRADERS_PER_MARKET = 128;
+    uint256 public constant MIN_PROBABILITY = 1e16; // 1%, at most 100x before fees
+    uint256 public constant MAX_PROBABILITY = 95e16;
 
-    enum Status { Scheduled, Trading, Resolved }
+    enum Status {
+        Scheduled,
+        Trading,
+        Resolved
+    }
 
     struct Pair {
         string name;
@@ -47,8 +60,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         uint64 endTime;
         uint256 openingPrice; // USD, normalized to 18 decimals
         uint256 closingPrice;
-        uint256 upPool;
-        uint256 downPool;
+        uint256 volatilityBps; // annualized volatility, fixed when scheduled
         uint256 upOutstanding;
         uint256 downOutstanding;
         bool upWins; // equality is Up
@@ -65,6 +77,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     mapping(bytes32 => bool) public scheduled;
     mapping(uint256 => mapping(address => uint256)) public upBalance;
     mapping(uint256 => mapping(address => uint256)) public downBalance;
+    mapping(uint256 => address[]) public traders;
     uint256 public reservedPayout;
     uint256 public unresolvedExposureMarkets;
     uint256 public totalFees;
@@ -72,12 +85,21 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
 
     event PairAdded(uint256 indexed pairId, string name, bytes32 priceId);
     event PairRemoved(uint256 indexed pairId);
-    event MarketCreated(uint256 indexed marketId, uint256 indexed pairId, uint64 startTime, uint64 endTime, uint256 depth);
+    event MarketCreated(
+        uint256 indexed marketId, uint256 indexed pairId, uint64 startTime, uint64 endTime, uint256 volatilityBps
+    );
     event MarketOpened(uint256 indexed marketId, uint256 price);
     event MarketResolved(uint256 indexed marketId, uint256 price, bool upWins, uint256 liability);
-    event Bought(uint256 indexed marketId, address indexed trader, bool up, uint256 assets, uint256 shares, uint256 fee);
-    event Sold(uint256 indexed marketId, address indexed trader, bool up, uint256 shares, uint256 assets, uint256 fee);
-    event Claimed(uint256 indexed marketId, address indexed trader, uint256 assets);
+    event Bought(
+        uint256 indexed marketId,
+        address indexed trader,
+        bool up,
+        uint256 assets,
+        uint256 shares,
+        uint256 fee,
+        uint256 entryPrice
+    );
+    event Paid(uint256 indexed marketId, address indexed trader, uint256 assets);
     event Deposited(address indexed lp, uint256 assets, uint256 shares);
     event Withdrawn(address indexed lp, uint256 assets, uint256 shares);
     event TradingPaused(bool paused);
@@ -92,12 +114,26 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         shareToken = new pmUSDC(address(this));
     }
 
-    function marketCount() external view returns (uint256) { return markets.length; }
-    function getMarket(uint256 id) external view returns (Market memory) { return markets[id]; }
+    function marketCount() external view returns (uint256) {
+        return markets.length;
+    }
+
+    function getMarket(uint256 id) external view returns (Market memory) {
+        return markets[id];
+    }
+
+    function traderCount(uint256 id) external view returns (uint256) {
+        return traders[id].length;
+    }
 
     /// @notice Total pair IDs ever assigned, including removed pairs. IDs are never reused.
-    function pairCount() external view returns (uint256) { return pairs.length; }
-    function priceIds(uint256 pairId) external view returns (bytes32) { return pairs[pairId].priceId; }
+    function pairCount() external view returns (uint256) {
+        return pairs.length;
+    }
+
+    function priceIds(uint256 pairId) external view returns (bytes32) {
+        return pairs[pairId].priceId;
+    }
 
     function addPair(string calldata name, bytes32 priceId) external onlyOwner returns (uint256 pairId) {
         require(bytes(name).length > 0, "Invalid name");
@@ -128,35 +164,46 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         emit TradingPaused(paused);
     }
 
-    /// @notice Schedule one UTC-aligned round per asset/duration/start. Depth sets the initial 50/50 curve.
-    function createMarket(uint256 pairId, uint64 duration, uint64 startTime, uint256 depth)
-        external onlyOwner returns (uint256 id)
+    /// @notice Schedule one UTC-aligned round with immutable annualized volatility (100-50,000 bps).
+    function createMarket(uint256 pairId, uint64 duration, uint64 startTime, uint256 volatilityBps)
+        external
+        onlyOwner
+        returns (uint256 id)
     {
         require(pairId < pairs.length, "Invalid pair");
         require(pairs[pairId].active, "Pair inactive");
-        require(duration == 5 minutes || duration == 15 minutes || duration == 1 hours || duration == 1 days, "Invalid duration");
+        require(
+            duration == 5 minutes || duration == 15 minutes || duration == 1 hours || duration == 1 days,
+            "Invalid duration"
+        );
         require(startTime > block.timestamp && startTime % duration == 0, "Invalid start");
-        require(depth > 0 && depth <= MAX_INVENTORY, "Invalid depth");
+        require(volatilityBps >= 100 && volatilityBps <= 50_000, "Invalid volatility");
         bytes32 key = keccak256(abi.encode(pairId, duration, startTime));
         require(!scheduled[key], "Round exists");
         scheduled[key] = true;
         id = markets.length;
-        markets.push(Market(pairId, Status.Scheduled, startTime, startTime + duration, 0, 0, depth, depth, 0, 0, false));
-        emit MarketCreated(id, pairId, startTime, startTime + duration, depth);
+        markets.push(
+            Market(pairId, Status.Scheduled, startTime, startTime + duration, 0, 0, volatilityBps, 0, 0, false)
+        );
+        emit MarketCreated(id, pairId, startTime, startTime + duration, volatilityBps);
     }
 
     /// @notice Anyone can open a scheduled market with the first Pyth update at/after its start.
     function openMarket(uint256 id, bytes[] calldata data) external payable nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Scheduled, "Not scheduled");
-        require(block.timestamp >= m.startTime && block.timestamp <= m.startTime + ORACLE_WINDOW, "Opening window closed");
+        require(
+            block.timestamp >= m.startTime && block.timestamp <= m.startTime + ORACLE_WINDOW, "Opening window closed"
+        );
         m.openingPrice = _boundaryPrice(m.pairId, m.startTime, data);
         m.status = Status.Trading;
         emit MarketOpened(id, m.openingPrice);
     }
 
     /// @notice Conservative equity while rounds are open; exact net assets after all rounds resolve.
-    function vaultValue() public view returns (uint256) { return usdc.balanceOf(address(this)) - reservedPayout; }
+    function vaultValue() public view returns (uint256) {
+        return usdc.balanceOf(address(this)) - reservedPayout;
+    }
 
     /// @dev Virtual asset/share prevents a zero-supply donation from being awarded to the next depositor.
     function previewDeposit(uint256 assets) public view returns (uint256) {
@@ -187,91 +234,82 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         emit Withdrawn(msg.sender, assets, shares);
     }
 
-    function quoteBuy(uint256 id, bool up, uint256 assets) public view returns (uint256 shares, uint256 fee) {
+    /// @notice Model probability using a symmetric rational sigmoid, not a calibrated forecast.
+    /// @dev z = (spot/open - 1) / (annualVol * sqrt(secondsRemaining/YEAR)).
+    ///      pUp = (1 + z/sqrt(1+z*z))/2. Prices use 18 decimals. Quote inputs are untrusted;
+    ///      buy verifies the supplied spot against a fresh, signed Pyth update.
+    function winProbability(uint256 id, bool up, uint256 currentPrice) public view returns (uint256 probability) {
         Market storage m = markets[id];
         _tradable(m);
-        fee = _fee(assets);
-        require(assets > fee, "Trade too small");
-        uint256 net = assets - fee;
-        (uint256 chosen, uint256 other) = up ? (m.upPool, m.downPool) : (m.downPool, m.upPool);
-        require(net <= MAX_INVENTORY - other && net <= MAX_INVENTORY - chosen, "Trade too large");
-        uint256 next = Math.mulDiv(chosen, other, other + net, Math.Rounding.Ceil);
-        shares = chosen + net - next;
+        require(currentPrice > 0 && currentPrice <= uint256(uint64(type(int64).max)) * WAD, "Invalid price");
+        uint256 timeScale = Math.sqrt(Math.mulDiv(m.endTime - block.timestamp, WAD * WAD, YEAR));
+        uint256 horizonVol = Math.mulDiv(m.volatilityBps * 1e14, timeScale, WAD);
+        uint256 difference =
+            currentPrice >= m.openingPrice ? currentPrice - m.openingPrice : m.openingPrice - currentPrice;
+        uint256 movement = Math.mulDiv(difference, WAD, m.openingPrice);
+        // Saturation bounds intermediate arithmetic; such extreme odds are rejected below.
+        uint256 z = Math.min(Math.mulDiv(movement, WAD, horizonVol), 10 * WAD);
+        uint256 score = Math.mulDiv(z, WAD, Math.sqrt(WAD * WAD + z * z));
+        uint256 upProbability = currentPrice >= m.openingPrice ? (WAD + score) / 2 : (WAD - score) / 2;
+        probability = up ? upProbability : WAD - upProbability;
+        require(probability >= MIN_PROBABILITY && probability <= MAX_PROBABILITY, "Odds outside limits");
     }
 
-    function buy(uint256 id, bool up, uint256 assets, uint256 minShares, uint256 deadline)
-        external nonReentrant returns (uint256 shares)
+    /// @notice Fixed gross winning payout including returned stake. Multiplier = shares/assets.
+    /// @dev Expected vault edge is feeBps if the model probability matches the actual probability.
+    function quoteBuy(uint256 id, bool up, uint256 assets, uint256 currentPrice)
+        public
+        view
+        returns (uint256 shares, uint256 fee)
     {
+        uint256 probability = winProbability(id, up, currentPrice);
+        fee = _fee(assets);
+        require(assets > fee, "Trade too small");
+        shares = Math.mulDiv(assets - fee, WAD, probability);
+        require(shares > assets, "Trade too small");
+    }
+
+    function buy(
+        uint256 id,
+        bool up,
+        uint256 assets,
+        uint256 currentPrice,
+        uint256 minShares,
+        uint256 deadline,
+        bytes[] calldata data
+    ) external payable nonReentrant returns (uint256 shares) {
         require(block.timestamp <= deadline, "Deadline passed");
         require(shareToken.totalSupply() > 0, "No LP liquidity");
-        uint256 fee;
-        (shares, fee) = quoteBuy(id, up, assets);
-        require(shares > 0 && shares >= minShares, "Share slippage");
         Market storage m = markets[id];
+        _tradable(m);
+        uint256 price = _currentPrice(m, data);
+        require(price == currentPrice, "Price mismatch");
+        uint256 fee;
+        (shares, fee) = quoteBuy(id, up, assets, price);
+        require(shares > 0 && shares >= minShares, "Share slippage");
+        if (upBalance[id][msg.sender] == 0 && downBalance[id][msg.sender] == 0) {
+            require(traders[id].length < MAX_TRADERS_PER_MARKET, "Market participant limit");
+            traders[id].push(msg.sender);
+        }
         uint256 oldReserve = Math.max(m.upOutstanding, m.downOutstanding);
-        uint256 net = assets - fee;
         if (up) {
-            m.upPool = m.upPool + net - shares;
-            m.downPool += net;
             m.upOutstanding += shares;
             upBalance[id][msg.sender] += shares;
         } else {
-            m.downPool = m.downPool + net - shares;
-            m.upPool += net;
             m.downOutstanding += shares;
             downBalance[id][msg.sender] += shares;
         }
         _updateReserve(m, oldReserve);
         _receiveUSDC(assets);
-        require(reservedPayout <= Math.mulDiv(usdc.balanceOf(address(this)), MAX_UTILIZATION_BPS, BPS), "Vault utilization exceeded");
+        require(
+            reservedPayout <= Math.mulDiv(usdc.balanceOf(address(this)), MAX_UTILIZATION_BPS, BPS),
+            "Vault utilization exceeded"
+        );
         totalFees += fee;
-        emit Bought(id, msg.sender, up, assets, shares, fee);
+        emit Bought(id, msg.sender, up, assets, shares, fee, price);
     }
 
-    /// @notice Quote shares needed to receive grossAssets less the trading fee.
-    function quoteSell(uint256 id, bool up, uint256 grossAssets) public view returns (uint256 shares, uint256 assets, uint256 fee) {
-        Market storage m = markets[id];
-        _tradable(m);
-        fee = _fee(grossAssets);
-        require(grossAssets > fee, "Trade too small");
-        assets = grossAssets - fee;
-        (uint256 chosen, uint256 other) = up ? (m.upPool, m.downPool) : (m.downPool, m.upPool);
-        require(grossAssets < other, "Insufficient pool");
-        uint256 next = Math.mulDiv(chosen, other, other - grossAssets, Math.Rounding.Ceil);
-        require(next <= MAX_INVENTORY, "Trade too large");
-        shares = grossAssets + next - chosen;
-    }
-
-    function sell(uint256 id, bool up, uint256 grossAssets, uint256 maxShares, uint256 deadline)
-        external nonReentrant returns (uint256 shares, uint256 assets)
-    {
-        require(block.timestamp <= deadline, "Deadline passed");
-        uint256 fee;
-        (shares, assets, fee) = quoteSell(id, up, grossAssets);
-        require(shares <= maxShares, "Share slippage");
-        Market storage m = markets[id];
-        uint256 oldReserve = Math.max(m.upOutstanding, m.downOutstanding);
-        if (up) {
-            require(upBalance[id][msg.sender] >= shares, "Insufficient shares");
-            upBalance[id][msg.sender] -= shares;
-            m.upOutstanding -= shares;
-            m.upPool = m.upPool + shares - grossAssets;
-            m.downPool -= grossAssets;
-        } else {
-            require(downBalance[id][msg.sender] >= shares, "Insufficient shares");
-            downBalance[id][msg.sender] -= shares;
-            m.downOutstanding -= shares;
-            m.downPool = m.downPool + shares - grossAssets;
-            m.upPool -= grossAssets;
-        }
-        _updateReserve(m, oldReserve);
-        require(usdc.balanceOf(address(this)) >= reservedPayout + assets, "Insufficient collateral");
-        totalFees += fee;
-        usdc.safeTransfer(msg.sender, assets);
-        emit Sold(id, msg.sender, up, shares, assets, fee);
-    }
-
-    /// @notice Resolve once for all holders, even while trading is paused. No settlement deadline.
+    /// @notice Resolve and pay all winners atomically, even while paused. Anyone may call after expiry.
     function resolveMarket(uint256 id, bytes[] calldata data) external payable nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Trading && block.timestamp >= m.endTime, "Not resolvable");
@@ -281,26 +319,20 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         m.status = Status.Resolved;
         uint256 oldReserve = Math.max(m.upOutstanding, m.downOutstanding);
         uint256 liability = m.upWins ? m.upOutstanding : m.downOutstanding;
-        reservedPayout = reservedPayout - oldReserve + liability;
+        reservedPayout -= oldReserve;
         if (oldReserve != 0) --unresolvedExposureMarkets;
+        m.upOutstanding = 0;
+        m.downOutstanding = 0;
         emit MarketResolved(id, price, m.upWins, liability);
-    }
-
-    /// @notice Anyone may submit a claim; USDC always goes to the holder. Losing balances are cleared too.
-    function claim(uint256 id, address holder) external nonReentrant returns (uint256 assets) {
-        Market storage m = markets[id];
-        require(m.status == Status.Resolved, "Not resolved");
-        uint256 up = upBalance[id][holder];
-        uint256 down = downBalance[id][holder];
-        require(up != 0 || down != 0, "Nothing to claim");
-        upBalance[id][holder] = 0;
-        downBalance[id][holder] = 0;
-        m.upOutstanding -= up;
-        m.downOutstanding -= down;
-        assets = m.upWins ? up : down;
-        reservedPayout -= assets;
-        if (assets != 0) usdc.safeTransfer(holder, assets);
-        emit Claimed(id, holder, assets);
+        address[] storage holders = traders[id];
+        for (uint256 i; i < holders.length; ++i) {
+            address holder = holders[i];
+            uint256 assets = m.upWins ? upBalance[id][holder] : downBalance[id][holder];
+            upBalance[id][holder] = 0;
+            downBalance[id][holder] = 0;
+            if (assets != 0) usdc.safeTransfer(holder, assets);
+            emit Paid(id, holder, assets);
+        }
     }
 
     function _tradable(Market storage m) private view {
@@ -330,10 +362,32 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         require(msg.value == fee, "Incorrect Pyth fee");
         bytes32[] memory ids = new bytes32[](1);
         ids[0] = pairs[pairId].priceId;
-        PythStructs.PriceFeed[] memory feeds = pyth.parsePriceFeedUpdatesUnique{value: fee}(data, ids, timestamp, timestamp + ORACLE_WINDOW);
+        PythStructs.PriceFeed[] memory feeds =
+            pyth.parsePriceFeedUpdatesUnique{value: fee}(data, ids, timestamp, timestamp + ORACLE_WINDOW);
         require(feeds.length == 1 && feeds[0].id == ids[0], "Wrong feed");
         PythStructs.Price memory p = feeds[0].price;
-        require(p.publishTime >= timestamp && p.publishTime <= timestamp + ORACLE_WINDOW && p.publishTime <= block.timestamp, "Invalid publish time");
+        require(
+            p.publishTime >= timestamp && p.publishTime <= timestamp + ORACLE_WINDOW
+                && p.publishTime <= block.timestamp,
+            "Invalid publish time"
+        );
+        return _normalizePrice(p);
+    }
+
+    function _currentPrice(Market storage m, bytes[] calldata data) private returns (uint256) {
+        uint256 fee = pyth.getUpdateFee(data);
+        require(msg.value == fee, "Incorrect Pyth fee");
+        pyth.updatePriceFeeds{value: fee}(data);
+        PythStructs.Price memory p = pyth.getPriceNoOlderThan(pairs[m.pairId].priceId, MAX_PRICE_AGE);
+        require(
+            p.publishTime >= m.startTime && p.publishTime <= block.timestamp
+                && block.timestamp - p.publishTime <= MAX_PRICE_AGE,
+            "Invalid publish time"
+        );
+        return _normalizePrice(p);
+    }
+
+    function _normalizePrice(PythStructs.Price memory p) private pure returns (uint256) {
         require(p.price > 0 && p.expo >= -18 && p.expo <= 0, "Invalid price");
         require(uint256(p.conf) * BPS <= uint256(uint64(p.price)) * MAX_CONFIDENCE_BPS, "Uncertain price");
         return uint256(uint64(p.price)) * 10 ** uint32(int32(18) + p.expo);

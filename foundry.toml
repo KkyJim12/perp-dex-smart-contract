@@ -14,4 +14,13 @@ optimizer = true
 optimizer_runs = 1
 via_ir = true
 
+# Exercise real EIP-7702 delegation under Prague without changing the compiler
+# or bytecode used by the existing market deployment scripts.
+[profile.eip7702]
+test = "test7702"
+out = "out/eip7702"
+cache_path = "cache/eip7702"
+solc_version = "0.8.30"
+evm_version = "prague"
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

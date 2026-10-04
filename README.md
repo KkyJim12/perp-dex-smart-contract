@@ -1,5 +1,12 @@
 # Monad Quick Start Guide
 
+## EIP-7702 trading accounts
+
+`TradingAccount7702` adds atomic approval-and-trade batches and signed sponsored
+execution for the existing PerpDex, PredictionMarketAMM, and OptionsAMM. Trades
+and payouts remain attached to the user's existing EOA. See
+[deployment, wallet integration, and tests](docs/eip7702.md).
+
 ## Deploy and verify all markets
 
 Configure `.env` using `.env.example`, then run:

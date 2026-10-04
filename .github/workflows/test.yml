@@ -38,3 +38,9 @@ jobs:
         run: |
           forge test -vvv
         id: test
+
+      - name: Run EIP-7702 delegation tests
+        env:
+          FOUNDRY_PROFILE: eip7702
+        run: forge test -vvv
+        id: test-eip7702

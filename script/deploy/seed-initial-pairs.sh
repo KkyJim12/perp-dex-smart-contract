@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction] [--dry-run]
+# Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction|options] [--dry-run]
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/../.."
 
 if [[ "${1:-}" == "--help" || "$#" -gt 3 ]]; then
-    echo "Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction] [--dry-run]"
+    echo "Usage: bash script/deploy/seed-initial-pairs.sh [environment-file] [both|perp|oneclick|prediction|options] [--dry-run]"
     exit 0
 fi
 
@@ -18,7 +18,8 @@ case "$TARGET" in
     perp) ENTRYPOINT=ConfigurePerpDexPairs ;;
     oneclick) ENTRYPOINT=ConfigureOneClickPairs ;;
     prediction) ENTRYPOINT=ConfigurePredictionPairs ;;
-    *) echo "Error: target must be both, perp, oneclick, or prediction." >&2; exit 1 ;;
+    options) ENTRYPOINT=ConfigureOptionsPairs ;;
+    *) echo "Error: target must be both, perp, oneclick, prediction, or options." >&2; exit 1 ;;
 esac
 if [[ -n "$MODE" && "$MODE" != "--dry-run" ]]; then
     echo "Error: third argument must be --dry-run or omitted to broadcast." >&2
@@ -53,6 +54,9 @@ fi
 
 if [[ "$TARGET" == "prediction" ]]; then
     : "${PREDICTION_MARKET_AMM_ADDRESS:?Error: PREDICTION_MARKET_AMM_ADDRESS is required}"
+fi
+if [[ "$TARGET" == "options" ]]; then
+    : "${OPTIONS_AMM_ADDRESS:?Error: OPTIONS_AMM_ADDRESS is required}"
 fi
 
 ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"

@@ -44,7 +44,7 @@ if [[ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]]; then
 fi
 
 if [[ "${INITIALIZE_CONFIRM:-}" != "yes" ]]; then
-    read -r -p "Mint MockUSDC when enabled and authorize $BACKEND_ADDRESS as OneClick backend? (y/N) " REPLY
+    read -r -p "Mint MockUSDC when enabled and authorize $BACKEND_ADDRESS for OneClick and configured OptionsAMM? (y/N) " REPLY
     if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
         echo "Initialization cancelled. Set INITIALIZE_CONFIRM=yes for non-interactive use."
         exit 0

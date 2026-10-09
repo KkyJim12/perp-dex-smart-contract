@@ -266,28 +266,31 @@ bash script/deploy/initialize-deployment.sh .env
 When `DEPLOY_MOCK_USDC=true`, this mints
 `INITIAL_MOCK_USDC_MINT_AMOUNT` MockUSDC (default: 100,000,000 USDC) to the
 deployed owner. It authorizes the nonzero `BACKEND_ADDRESS` from the environment
-file as the OneClickPerpDex backend. `PRIVATE_KEY` must still belong to the owner
+file as the OneClickPerpDex backend and, when `OPTIONS_AMM_ADDRESS` is configured,
+as the OptionsAMM backend. `PRIVATE_KEY` must still belong to the owner
 who can perform initialization.
 Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
 
 ## Options AMM vault
 
-`OptionsAMM` is an isolated, cash-settled European-options vault. An option
-buyer pays its premium in USDC and the vault takes the short/counterparty
-position. LPs deposit USDC into the vault and receive transferable `opUSDC`
-shares, redeemable pro rata after all open option obligations are settled.
+`OptionsAMM` has scheduled call/put rounds, like the prediction vault. The owner
+authorizes a backend to create, open, and finalize markets. Users buy longs for
+a dynamically priced USDC premium and can sell all or part back before expiry.
+Backend finalization authenticates one fixed Pyth expiry price and automatically
+pays remaining holders. Failed recipient transfers become funded claims so
+other payouts and LP exits can proceed.
 
-Each option's maximum payout equals its USDC-denominated `contracts` amount;
-the AMM reserves that full amount before accepting the trade and caps aggregate
-reservation at 80% of vault assets. This ensures buyers are fully
-collateralized. LP deposits and withdrawals lock while obligations exist,
-preventing a later LP from capturing (or an early LP from stranding) the
-reserve that belongs to the LPs underwriting those options. Settlement is
-permissionless after expiry using a Pyth price update whose publish time is at
-or after the expiry.
+Premiums use an eight-step binomial approximation with spot, remaining time,
+fixed annualized volatility, and a bid/ask fee. Each option's maximum payout is
+its USDC notional; total reserves are capped at 80% of assets excluding deferred
+claims. LP shares have donation protection, slippage limits, and queued exits
+that stop fresh purchases until withdrawals are processed.
 
-Deploy with `DeployOptionsAMM.s.sol`, set `USDC_ADDRESS`, `PYTH_ADDRESS`, and
-`PRIVATE_KEY`, then create markets with raw Pyth-price strike units.
+Deploy with `DeployOptionsAMM.s.sol`, authorize `BACKEND_ADDRESS` through the
+initialization script, and seed pairs with
+`bash script/deploy/seed-initial-pairs.sh .env options`. Markets use 18-decimal
+USD strike units. This replaces the old options ABI and requires redeployment.
+See [backend lifecycle, trading interfaces, pricing limits, and LP integration](docs/options.md).
 
 ## LP risk circuit breaker
 

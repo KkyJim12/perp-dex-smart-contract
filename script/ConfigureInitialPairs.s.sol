@@ -66,3 +66,17 @@ contract ConfigurePredictionPairs is Script, InitialPairConfig {
         vm.stopBroadcast();
     }
 }
+
+/// @notice Seed BTC, ETH and SOL on an owner-controlled options vault.
+contract ConfigureOptionsPairs is Script, InitialPairConfig {
+    function run() external {
+        uint256 privateKey = vm.envUint("PRIVATE_KEY");
+        OptionsAMM amm = OptionsAMM(vm.envAddress("OPTIONS_AMM_ADDRESS"));
+        require(address(amm).code.length > 0, "No options AMM at target address");
+        require(amm.owner() == vm.addr(privateKey), "Signer is not options owner");
+        require(amm.pairCount() == 0, "Options pairs already initialized");
+        vm.startBroadcast(privateKey);
+        _configureOptionsPairs(amm);
+        vm.stopBroadcast();
+    }
+}

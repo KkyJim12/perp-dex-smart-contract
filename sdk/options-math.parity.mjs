@@ -88,15 +88,15 @@ try {
   let quotesChecked = 0;
   const cases = [];
   for (const isCall of [true, false]) {
-    for (const duration of [300n, 86_400n]) {
+    for (const duration of [86_400n, 259_200n, 604_800n, 1_209_600n, 2_592_000n]) {
       for (const volatilityBps of [100n, 10_000n, 50_000n]) {
         cases.push({ isCall, duration, volatilityBps, feeBps: volatilityBps === 100n ? 0n :
           volatilityBps === 10_000n ? 300n : 500n, strikePrice: 100n * WAD });
       }
     }
   }
-  cases.push({ isCall: true, duration: 300n, volatilityBps: 10_000n, feeBps: 300n, strikePrice: 0n });
-  cases.push({ isCall: true, duration: 86_400n, volatilityBps: 50_000n, feeBps: 500n, strikePrice: MAX_PRICE });
+  cases.push({ isCall: true, duration: 86_400n, volatilityBps: 10_000n, feeBps: 300n, strikePrice: 0n });
+  cases.push({ isCall: true, duration: 2_592_000n, volatilityBps: 50_000n, feeBps: 500n, strikePrice: MAX_PRICE });
 
   for (const scenario of cases) {
     assert.equal(await rpc('evm_revert', [snapshot]), true);

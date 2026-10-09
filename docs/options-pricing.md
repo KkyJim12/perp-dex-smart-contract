@@ -246,8 +246,8 @@ node sdk/options-math.parity.mjs
 ```
 
 The parity test launches and terminates its own local Anvil instance. It compares
-321 unit values and 1,926 buy/sell outcomes against the actual compiled contract
-across calls/puts, both short and daily rounds, volatility/fee bounds, near-expiry
+753 unit values and 4,518 buy/sell outcomes against the actual compiled contract
+across calls/puts, all five supported durations, volatility/fee bounds, near-expiry
 times, tiny rounding differences, automatic opening strike, and maximum price.
 Amounts match exactly. Set FOUNDRY_BIN if forge/cast/anvil are installed outside
 the default ~/.foundry/bin directory. This checks agreement with the implemented

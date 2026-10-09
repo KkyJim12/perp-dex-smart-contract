@@ -214,7 +214,8 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
     ) external onlyOperator returns (uint256 id) {
         require(pairId < pairs.length && pairs[pairId].active, "Pair inactive");
         require(
-            duration == 5 minutes || duration == 15 minutes || duration == 1 hours || duration == 1 days,
+            duration == 1 days || duration == 3 days || duration == 7 days || duration == 14 days
+                || duration == 30 days,
             "Invalid duration"
         );
         require(startTime > block.timestamp && startTime % duration == 0, "Invalid start");

@@ -44,7 +44,8 @@ Creation, opening, cancellation, and finalization require an authorized backend
 or the owner. Trading does not require backend authorization. Status moves from
 Scheduled to Trading to Finalized. A market with no exposure may be cancelled.
 
-Durations match prediction rounds: 300, 900, 3,600, or 86,400 seconds. Start time
+Durations are 1, 3, 7, 14, or 30 days: 86,400, 259,200, 604,800, 1,209,600, or
+2,592,000 seconds. Start time
 must be in the future and aligned to the duration (`startTime % duration == 0`).
 Strike uses 18-decimal USD units (`100e18` means $100). Zero strike selects the
 authenticated opening price when the market opens. Volatility is annualized,

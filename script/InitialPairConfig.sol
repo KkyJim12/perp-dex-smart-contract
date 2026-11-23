@@ -62,15 +62,6 @@ abstract contract InitialPairConfig {
             INITIAL_MAX_TP
         );
         dex.addPair(
-            "XRP_USD",
-            0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8,
-            5,
-            500000e6,
-            2,
-            250,
-            INITIAL_MAX_TP
-        );
-        dex.addPair(
             "HYPE_USD",
             0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b,
             2,
@@ -107,24 +98,12 @@ abstract contract InitialPairConfig {
         // dex.addPair("GOOGL", 0x5a48c03e9b9cb337801073ed9d166817473697efff0d138874e0f6a33d6d5aa6, 10, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("AAPL", 0x49f6b65cb1de6b10eaf75e7c03ca029c306d0357e91b5311b175084a5ad55688, 10, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("AMZN", 0xb5d0e0fa58a1f8b81498ae670ce93c872d14434b72c364885d4fa1b257cbb07a, 10, 50000e6, 2, 25, INITIAL_MAX_TP);
-        // dex.addPair("EURUSD", 0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b, 20, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("GBPUSD", 0x84c2dde9633d93d1bcad84e7dc41c9d56578b7ec52fabedc1f335d673df0a7c1, 15, 50000e6, 2, 100, INITIAL_MAX_TP);
-        // dex.addPair("USDJPY", 0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52, 15, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("AUDUSD", 0x67a6f93030420c1c9e3fe37c1ab6b77966af82f995944a9fefce357a22854a80, 10, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("USDCAD", 0x3112b03a41c910ed446852aacf67118cb1bec67b2cd0b9a214c58cc0eaa2ecca, 10, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("USDCHF", 0x0b1e3297e69f162877b577b0d6a47a0d63b2392bc8499e6540da4187a63e28f8, 10, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("NZDUSD", 0x92eea8ba1b00078cdc2ef6f64f091f262e8c7d0576ee4677572f314ebfcc9806, 8, 50000e6, 2, 100, INITIAL_MAX_TP);
-        // dex.addPair("QQQ", 0x9695e2b96ea7b3859da9ed25b7a46a920a776e2fdae19a7bcfdf2b219230452d, 15, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("SPY", 0x19e09bb805456ada3979a7d1cbb4b6d63babc3a0f8e8a9509f68afa5c4c11cd5, 15, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair(
-            "XAG_USD",
-            0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e,
-            10,
-            20000e6,
-            2,
-            250,
-            INITIAL_MAX_TP
-        );
         dex.addPair(
             "XAU_USD",
             0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2,
@@ -134,6 +113,52 @@ abstract contract InitialPairConfig {
             250,
             INITIAL_MAX_TP
         );
+        dex.addPair(
+            "XAG_USD",
+            0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e,
+            10,
+            20000e6,
+            2,
+            250,
+            INITIAL_MAX_TP
+        );
+        // Pyth Core feed IDs verified against https://hermes.pyth.network/v2/price_feeds.
+        dex.addPair(
+            "USD_JPY",
+            0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52,
+            15,
+            50000e6,
+            2,
+            100,
+            INITIAL_MAX_TP
+        );
+        dex.addPair(
+            "EUR_USD",
+            0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b,
+            20,
+            50000e6,
+            2,
+            100,
+            INITIAL_MAX_TP
+        );
+        dex.addPair(
+            "VOO_USD",
+            0x236b30dd09a9c00dfeec156c7b1efd646c0f01825a1758e3e4a0679e3bdff179,
+            15,
+            50000e6,
+            2,
+            100,
+            INITIAL_MAX_TP
+        );
+        dex.addPair(
+            "QQQ_USD",
+            0x9695e2b96ea7b3859da9ed25b7a46a920a776e2fdae19a7bcfdf2b219230452d,
+            15,
+            50000e6,
+            2,
+            100,
+            INITIAL_MAX_TP
+        );
     }
 
     function _configureOneClickPerpDex(OneClickPerpDex dex) internal {
@@ -141,7 +166,6 @@ abstract contract InitialPairConfig {
         dex.addPair("ETH_USD", 1000, 500000e6, 2, 500, INITIAL_MAX_TP);
         dex.addPair("SOL_USD", 1000, 500000e6, 2, 500, INITIAL_MAX_TP);
         dex.addPair("BNB_USD", 1000, 500000e6, 2, 250, INITIAL_MAX_TP);
-        dex.addPair("XRP_USD", 500, 500000e6, 2, 250, INITIAL_MAX_TP);
         dex.addPair("HYPE_USD", 200, 500000e6, 2, 250, INITIAL_MAX_TP);
         // dex.addPair("MON_USD", 300, 50000e6, 2, 50, INITIAL_MAX_TP);
         // dex.addPair("SUI_USD", 500, 50000e6, 2, 50, INITIAL_MAX_TP);
@@ -163,16 +187,17 @@ abstract contract InitialPairConfig {
         // dex.addPair("GOOGL", 1000, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("AAPL", 1000, 50000e6, 2, 25, INITIAL_MAX_TP);
         // dex.addPair("AMZN", 1000, 50000e6, 2, 25, INITIAL_MAX_TP);
-        // dex.addPair("EURUSD", 2000, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("GBPUSD", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
-        // dex.addPair("USDJPY", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("AUDUSD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("USDCAD", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("USDCHF", 1000, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("NZDUSD", 800, 50000e6, 2, 100, INITIAL_MAX_TP);
-        // dex.addPair("QQQ", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
         // dex.addPair("SPY", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
-        dex.addPair("XAG_USD", 1000, 20000e6, 2, 250, INITIAL_MAX_TP);
         dex.addPair("XAU_USD", 1000, 20000e6, 2, 250, INITIAL_MAX_TP);
+        dex.addPair("XAG_USD", 1000, 20000e6, 2, 250, INITIAL_MAX_TP);
+        dex.addPair("USD_JPY", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
+        dex.addPair("EUR_USD", 2000, 50000e6, 2, 100, INITIAL_MAX_TP);
+        dex.addPair("VOO_USD", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
+        dex.addPair("QQQ_USD", 1500, 50000e6, 2, 100, INITIAL_MAX_TP);
     }
 }

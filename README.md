@@ -81,8 +81,13 @@ verify-native-staking.bat
 
 Trading pairs are not stored in either DEX constructor. After deployment,
 seed the canonical configuration from `script/InitialPairConfig.sol`.
-Currently nine pairs are enabled: BTC, ETH, SOL, BNB, XRP, HYPE, DOGE, XAG,
-and XAU (all `_USD`). Commented-out pairs are not seeded.
+The twelve enabled pairs are `BTC_USD`, `ETH_USD`, `SOL_USD`, `BNB_USD`,
+`HYPE_USD`, `DOGE_USD`, `XAU_USD`, `XAG_USD`, `USD_JPY`, `EUR_USD`,
+`VOO_USD`, and `QQQ_USD`. Commented-out pairs are not seeded.
+BTC, ETH, and SOL allow up to 500x leverage; BNB, HYPE, DOGE, XAU, and XAG
+allow 250x; FX and ETF pairs allow 100x. All pairs have a 2x minimum leverage
+and 500% maximum profit on margin. Maximum position sizes are 500,000 USDC
+for crypto, 20,000 USDC for metals, and 50,000 USDC for FX and ETFs.
 
 Set `PRIVATE_KEY`, `RPC_URL`, `CHAIN_ID`, `PERPDEX_ADDRESS`, and
 `ONECLICK_PERPDEX_ADDRESS` in `.env`. Run from macOS/Linux or Git Bash on Windows:
@@ -294,9 +299,59 @@ See [backend lifecycle, trading interfaces, pricing limits, and LP integration](
 
 ## LP risk circuit breaker
 
+Both perpetual DEX contracts charge **3.5% of realized profit only**, after the
+position's profit cap. Losing and break-even positions pay no trading fee.
+The platform's 1.5% is credited to the existing owner-controlled secondary fee
+vault; the remaining 2% stays in the main LP pool. Both LP pool valuations
+exclude the secondary vault balance. Fee amounts round down to collateral units;
+any split rounding remainder stays with LPs. `ClosePosition.closeFee` reports
+the total fee, `FeeCollected` reports the platform amount, and `ProfitFeeSplit`
+reports both shares. Vault PnL reflects the net change in LP capital.
+For 100 USDC of gross profit, the trader receives 96.50 USDC net profit,
+the platform receives 1.50 USDC, and the LP pool retains 2.00 USDC.
+
+Both perpetual DEX contracts track OI as leveraged notional volume:
+`OI = sum(open margin * leverage)`. `getOpenInterest(pair)` returns long, short,
+and total OI; the existing OI fields in `pairFunding` and `pairInfo` also retain
+these notional statistics. Opening a position is limited by its margin and
+Available Liquidity. Notional OI is not an opening limit.
+
+`PairInfo.liquidityRatio` is the relative weight of LP capital allocated to the
+pair; `totalLiquidityRatio` is the sum of all pair weights. The current LP pool
+is allocated by that weight, then divided by the pair's
+`maxTP` profit multiplier and split equally between longs and shorts:
+`maxMarginPerSide = poolValue * pairWeight / totalWeight / maxTPMultiplier / 2`.
+For example, a pair allocated 10,000 USDC of LP capital with a 500% max TP
+permits 2,000 USDC total open margin, or 1,000 USDC per direction. A 100 USDC
+position uses 100 USDC of this allowance at either 2x or 500x leverage.
+
+`getAvailableLiquidity(pair)` replaces the old `getAvailableOI()` capacity view
+and returns `allocatedLiquidity`, `maxMarginPerSide`, `currentLongMargin`,
+`currentShortMargin`, `availableLongLiquidity`, `availableShortLiquidity`,
+`maxPositionSize`, and combined `availableLiquidity`. All values are in
+collateral units. The allocation is LP
+capital reserved for maximum profits; available long/short liquidity is the
+additional margin that can be opened, capped by the remaining global profit
+reserve. Frontends should label this capacity **Available Liquidity** and use
+`getOpenInterest()` for OI statistics. `maxPositionSize` remains a separate
+leveraged notional limit: a new position's size is `margin * leverage`.
+
+`pairInfo(pair)` and `allPairs(index)` return a `PairInfo` struct with live
+`availableLiquidity` and `usedLiquidity` attributes. Available liquidity is the
+pair's allocated LP capital divided by its
+`maxTP` profit multiplier, less used margin, respecting direction and global
+profit limits. Used liquidity is the sum of open long and short margins,
+independent of leverage, in collateral units (6 decimals for USDC).
+`OneClickPerpDex.getAllPairs()` returns the same live structs. Frontends can
+fetch both values together through `pairInfo("BTC_USD")`.
+These values are calculated when read so deposits, position changes, and owner
+configuration changes are reflected immediately. Frontends must update their
+ABIs for the struct returns, the `availableLiquidity` and `usedLiquidity` fields, and the renamed
+`liquidityRatio` and `totalLiquidityRatio` fields.
+
 Both `PerpDex` and `OneClickPerpDex` reserve the maximum possible profit for
 every open position (`margin * pair.maxTP`). New positions are rejected once
-the aggregate reserved profit would exceed 30% of the current LP pool. At the
+the aggregate reserved profit would exceed 100% of the current LP pool. At the
 default 500% max TP, each 1 USDC of margin therefore reserves 5 USDC.
 
 The first LP deposit records the initial liquidity baseline. A permissionless

@@ -31,7 +31,9 @@ contract OneClickPerpDex is ReentrancyGuard {
     address public owner;
 
     uint256 public constant ONE = 1e18;
-    uint256 public constant WINNING_FEE_BPS = 200; // 2% fee on winning positions only
+    uint256 public constant PLATFORM_FEE_BPS = 150; // 1.5% of realized profit
+    uint256 public constant LP_FEE_BPS = 200; // 2% of realized profit
+    uint256 public constant WINNING_FEE_BPS = PLATFORM_FEE_BPS + LP_FEE_BPS; // 3.5% total
     uint256 public constant SPREAD_BPS = 0;
     uint256 public constant MIN_MARGIN = 1e6; // 1 USDC
     // Profit ratios use 18 decimals: 1e18 = 100% profit on position margin.
@@ -58,29 +60,37 @@ contract OneClickPerpDex is ReentrancyGuard {
     struct PairInfo {
         string name;
         bool active;
-        uint256 oiRatio; // OI ratio weight (e.g., BTC=10, ETH=5, SOL=3)
+        uint256 liquidityRatio; // Relative weight of LP capital allocated to this pair
         uint256 maxPositionSize; // Max size per position in USDC (e.g., 5000e6 = 5000 USDC)
-        uint256 currentLongOI; // Current long open interest for this pair
-        uint256 currentShortOI; // Current short open interest for this pair
+        uint256 currentLongOI; // Open long notional: sum of margin * leverage
+        uint256 currentShortOI; // Open short notional: sum of margin * leverage
         uint256 minLeverage; // Minimum leverage allowed (e.g., 2 = 2x)
         uint256 maxLeverage; // Maximum leverage allowed (e.g., 100 = 100x)
         uint256 maxTP; // Maximum gross profit as a ratio of margin (1e18 = 100%)
+        uint256 availableLiquidity; // Remaining margin capacity, calculated by the pair getters
+        uint256 usedLiquidity; // Total open long + short margin in collateral units
     }
 
+    struct OpenMargins {
+        uint256 longMargin;
+        uint256 shortMargin;
+    }
+
+    mapping(string => OpenMargins) private pairOpenMargins;
     mapping(address => Position[]) public positions;
     mapping(address => string) public username;
     mapping(string => address) public usernameTaken;
-    mapping(string => PairInfo) public pairInfo;
+    mapping(string => PairInfo) private _pairInfo;
     mapping(string => bool) public pairPaused;
 
-    PairInfo[] public allPairs;
+    string[] private pairNames;
     address[] public allUsers;
 
     uint256 public totalOpenMargin;
-    uint256 public totalOIRatio; // Sum of all pair OI ratios
+    uint256 public totalLiquidityRatio; // Sum of all pair liquidity allocation weights
 
     // Maximum aggregate trader profit if every open position reaches its
-    // configured pair maxTP. This, rather than raw notional OI, is LP risk.
+    // original pair maxTP. This is the amount of LP capital reserved for profit.
     uint256 public totalWorstCaseProfit;
     mapping(bytes32 => uint256) public positionWorstCaseProfit;
 
@@ -148,6 +158,7 @@ contract OneClickPerpDex is ReentrancyGuard {
     event AllPositionsClosed(address indexed admin, uint256 timestamp);
     event TPSLModified(bytes32 indexed positionId, address indexed user, uint256 newTakeProfit, uint256 newStopLoss);
     event FeeCollected(bytes32 indexed positionId, address indexed user, uint256 feeAmount);
+    event ProfitFeeSplit(bytes32 indexed positionId, uint256 platformFee, uint256 liquidityFee);
     event LPDeposit(address indexed user, uint256 amount, uint256 shares);
     event LPWithdraw(address indexed user, uint256 amount, uint256 shares);
     event SecondaryVaultDeposit(address indexed user, uint256 amount, uint256 shares);
@@ -202,26 +213,28 @@ contract OneClickPerpDex is ReentrancyGuard {
 
     function _addPair(
         string memory pairs,
-        uint256 oiRatio,
+        uint256 liquidityRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage,
         uint256 maxTP
     ) internal {
         _validatePairMaxTP(maxTP);
-        pairInfo[pairs] = PairInfo(
+        _pairInfo[pairs] = PairInfo(
             pairs,
             true,
-            oiRatio,
+            liquidityRatio,
             maxPositionSize,
             0,
             0,
             minLeverage,
             maxLeverage,
-            maxTP
+            maxTP,
+            0,
+            0
         );
-        allPairs.push(pairInfo[pairs]);
-        totalOIRatio += oiRatio; // Add to total ratio sum
+        pairNames.push(pairs);
+        totalLiquidityRatio += liquidityRatio; // Add to total ratio sum
         emit PairAdded(pairs);
         emit PairStatus(pairs, true);
     }
@@ -297,9 +310,10 @@ contract OneClickPerpDex is ReentrancyGuard {
     // ------------------------------------------------------------------
 
     function getPoolValue() public view returns (uint256) {
-        // Trader funds are liabilities of the LP pool, so exclude their
-        // aggregate internal balance from the USDC held by this contract.
-        return usdc.balanceOf(address(this)) - totalUserBalances;
+        // Neither trader funds nor the platform/secondary vault belongs to LPs.
+        uint256 contractBalance = usdc.balanceOf(address(this));
+        uint256 reserved = totalUserBalances + secondaryVaultBalance;
+        return contractBalance > reserved ? contractBalance - reserved : 0;
     }
 
     function getTotalUserFunds() public view returns (uint256) {
@@ -520,7 +534,29 @@ contract OneClickPerpDex is ReentrancyGuard {
     }
 
     function getMaxWorstCaseProfit() public view returns (uint256) {
-        return (getPoolValue() * MAX_DRAWDOWN_BPS) / BPS;
+        // Reserve up to 100% of LP capital, independently of the drawdown breaker.
+        return getPoolValue();
+    }
+
+    function _getMaxOpenMarginPerSide(
+        PairInfo storage info,
+        uint256 poolValue
+    ) internal view returns (uint256) {
+        if (totalLiquidityRatio == 0 || info.maxTP == 0) return 0;
+        uint256 pairProfitBudget = (poolValue * info.liquidityRatio) / totalLiquidityRatio;
+        return ((pairProfitBudget * ONE) / info.maxTP) / 2;
+    }
+
+    function _releasePairExposure(Position storage pos) internal {
+        PairInfo storage info = _pairInfo[pos.pairs];
+        OpenMargins storage margins = pairOpenMargins[pos.pairs];
+        if (pos.isLong) {
+            info.currentLongOI -= pos.size;
+            margins.longMargin -= pos.margin;
+        } else {
+            info.currentShortOI -= pos.size;
+            margins.shortMargin -= pos.margin;
+        }
     }
 
     function _recordLiquiditySnapshot(uint256 poolValue) internal {
@@ -539,8 +575,8 @@ contract OneClickPerpDex is ReentrancyGuard {
     }
 
     function _pauseAllPairs() internal {
-        for (uint256 i = 0; i < allPairs.length; i++) {
-            string memory pairs = allPairs[i].name;
+        for (uint256 i = 0; i < pairNames.length; i++) {
+            string memory pairs = pairNames[i];
             if (!pairPaused[pairs]) {
                 pairPaused[pairs] = true;
                 emit PairPaused(pairs, true);
@@ -552,7 +588,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         uint256 additionalExposure = (margin * maxTP) / ONE;
         require(
             totalWorstCaseProfit + additionalExposure <= getMaxWorstCaseProfit(),
-            "Exceeds 30% worst-case loss limit"
+            "Exceeds 100% worst-case loss limit"
         );
     }
 
@@ -643,7 +679,7 @@ contract OneClickPerpDex is ReentrancyGuard {
         require(margin >= MIN_MARGIN, "Margin too small");
         require(entryPrice > 0, "Invalid entry price");
         
-        PairInfo storage info = pairInfo[pairs];
+        PairInfo storage info = _pairInfo[pairs];
         require(info.active, "Pair not active");
         require(!pairPaused[pairs], "Pair paused");
 
@@ -668,23 +704,20 @@ contract OneClickPerpDex is ReentrancyGuard {
         // Validate position size limit
         if (netSize > info.maxPositionSize) revert PositionSizeTooLarge();
 
-        // Validate OI limit (based on ratio distribution, split 50/50 between long and short)
+        // Allocate LP profit capacity by pair weight, split 50/50 by direction.
+        // Liquidity checks count open margin; OI is tracked separately as notional.
         uint256 poolValue = getPoolValue();
         require(poolValue > 0, "Pool is empty");
-        require(totalOIRatio > 0, "No pairs configured");
+        require(totalLiquidityRatio > 0, "No pairs configured");
         _validateWorstCaseProfit(margin, info.maxTP);
         
-        // Calculate max OI for this pair based on its ratio
-        // Formula: maxOI = (poolValue * pairRatio) / totalRatio
-        uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
-        uint256 maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
+        uint256 maxMarginPerSide = _getMaxOpenMarginPerSide(info, poolValue);
+        OpenMargins storage margins = pairOpenMargins[pairs];
         
         if (isLong) {
-            uint256 newLongOI = info.currentLongOI + netSize;
-            require(newLongOI <= maxOIPerSide, "Exceeds long OI limit");
+            require(margins.longMargin + margin <= maxMarginPerSide, "Insufficient long liquidity");
         } else {
-            uint256 newShortOI = info.currentShortOI + netSize;
-            require(newShortOI <= maxOIPerSide, "Exceeds short OI limit");
+            require(margins.shortMargin + margin <= maxMarginPerSide, "Insufficient short liquidity");
         }
 
         // Check user has sufficient available balance (internal balance system)
@@ -695,11 +728,13 @@ contract OneClickPerpDex is ReentrancyGuard {
         lockedBalances[user] += margin;
         totalOpenMargin += margin;
         
-        // Update pair OI (split by direction)
+        // Track notional OI for statistics and open margin for liquidity checks.
         if (isLong) {
             info.currentLongOI += netSize;
+            margins.longMargin += margin;
         } else {
             info.currentShortOI += netSize;
+            margins.shortMargin += margin;
         }
 
         _finalizeOpenPosition(
@@ -758,7 +793,7 @@ contract OneClickPerpDex is ReentrancyGuard {
             )
         );
 
-        _reserveWorstCaseProfit(id, netMargin, pairInfo[pairs].maxTP);
+        _reserveWorstCaseProfit(id, netMargin, _pairInfo[pairs].maxTP);
 
         emit OpenPosition(
             id,
@@ -796,7 +831,7 @@ contract OneClickPerpDex is ReentrancyGuard {
             if (pos.id == positionId) {
                 require(!pos.isClosed, "Position already closed");
 
-                PairInfo storage info = pairInfo[pos.pairs];
+                PairInfo storage info = _pairInfo[pos.pairs];
                 uint256 effectiveNewTP = _resolveAndValidateTakeProfit(
                     info,
                     pos.isLong,
@@ -973,21 +1008,7 @@ contract OneClickPerpDex is ReentrancyGuard {
                     totalOpenMargin = 0;
                 }
 
-                // Decrease pair OI (by direction)
-                PairInfo storage info = pairInfo[pos.pairs];
-                if (pos.isLong) {
-                    if (info.currentLongOI >= pos.size) {
-                        info.currentLongOI -= pos.size;
-                    } else {
-                        info.currentLongOI = 0;
-                    }
-                } else {
-                    if (info.currentShortOI >= pos.size) {
-                        info.currentShortOI -= pos.size;
-                    } else {
-                        info.currentShortOI = 0;
-                    }
-                }
+                _releasePairExposure(pos);
 
                 // Deduct full margin from user's internal balance (100% loss)
                 if (userBalances[user] >= pos.margin) {
@@ -1044,27 +1065,25 @@ contract OneClickPerpDex is ReentrancyGuard {
         int256 rawPayout = int256(pos.margin) + cappedPnl;
         uint256 payout = rawPayout > 0 ? uint256(rawPayout) : 0;
 
-        // Calculate vault PnL (opposite of user PnL)
-        int256 userPnL = int256(payout) - int256(pos.margin);
-        int256 vaultPnL = -userPnL;
-
-        // Track realized vault PnL
-        vaultTotalPnL += vaultPnL;
-        if (vaultPnL > 0) {
-            vaultTotalProfit += uint256(vaultPnL);
-        } else if (vaultPnL < 0) {
-            vaultTotalLoss += uint256(-vaultPnL);
-        }
-
-        // Apply 2% fee ONLY on winning positions
+        // Charge only realized profit: 1.5% to the platform, 2% retained by LPs.
         uint256 closeFee = 0;
+        uint256 platformFee = 0;
         if (payout > pos.margin) {
             uint256 profit = payout - pos.margin;
-            closeFee = (profit * WINNING_FEE_BPS) / 10000;
-            payout = payout - closeFee;
+            closeFee = (profit * WINNING_FEE_BPS) / BPS;
+            platformFee = (profit * PLATFORM_FEE_BPS) / BPS;
+            payout -= closeFee;
 
-            _collectFeeToSecondaryVault(closeFee, pos.id, user);
+            // Rounding dust stays with LPs; only the platform share is reserved.
+            _collectFeeToSecondaryVault(platformFee, pos.id, user);
+            emit ProfitFeeSplit(pos.id, platformFee, closeFee - platformFee);
         }
+
+        // Net LP asset change includes retained LP fees and excludes platform fees.
+        int256 vaultPnL = int256(pos.margin) - int256(payout) - int256(platformFee);
+        vaultTotalPnL += vaultPnL;
+        if (vaultPnL > 0) vaultTotalProfit += uint256(vaultPnL);
+        else if (vaultPnL < 0) vaultTotalLoss += uint256(-vaultPnL);
 
         // Unlock user funds from internal balance
         if (lockedBalances[user] >= pos.margin) {
@@ -1079,21 +1098,7 @@ contract OneClickPerpDex is ReentrancyGuard {
             totalOpenMargin = 0;
         }
 
-        // Decrease pair OI (by direction)
-        PairInfo storage info = pairInfo[pos.pairs];
-        if (pos.isLong) {
-            if (info.currentLongOI >= pos.size) {
-                info.currentLongOI -= pos.size;
-            } else {
-                info.currentLongOI = 0;
-            }
-        } else {
-            if (info.currentShortOI >= pos.size) {
-                info.currentShortOI -= pos.size;
-            } else {
-                info.currentShortOI = 0;
-            }
-        }
+        _releasePairExposure(pos);
 
         // Update user internal balance with payout
         // If user made profit, add to balance; if loss, deduct from balance
@@ -1144,7 +1149,7 @@ contract OneClickPerpDex is ReentrancyGuard {
 
         for (uint256 p = 0; p < pairs.length; p++) {
             require(prices[p] > 0, "Invalid close price");
-            require(bytes(pairInfo[pairs[p]].name).length > 0, "Pair not found");
+            require(bytes(_pairInfo[pairs[p]].name).length > 0, "Pair not found");
 
             for (uint256 duplicate = 0; duplicate < p; duplicate++) {
                 require(
@@ -1217,38 +1222,38 @@ contract OneClickPerpDex is ReentrancyGuard {
     /**
      * @notice Update pair configuration (owner only)
      * @param pairs Trading pair name (e.g., "BTC_USD")
-     * @param oiRatio OI ratio weight (e.g., 10 for BTC, 5 for ETH)
+     * @param liquidityRatio Liquidity allocation weight (e.g., 10 for BTC, 5 for ETH)
      * @param maxPositionSize Max position size in USDC (e.g., 5000e6 = 5000 USDC)
      * @param minLeverage Minimum leverage allowed (e.g., 2 = 2x)
      * @param maxLeverage Maximum leverage allowed (e.g., 100 = 100x)
      */
     function updatePairConfig(
         string calldata pairs,
-        uint256 oiRatio,
+        uint256 liquidityRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
     ) external onlyOwner {
-        PairInfo storage info = pairInfo[pairs];
+        PairInfo storage info = _pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
         if (
             minLeverage == 0 ||
             maxLeverage == 0 ||
             minLeverage > maxLeverage
         ) revert InvalidLeverage();
-        require(oiRatio > 0, "Invalid OI ratio");
+        require(liquidityRatio > 0, "Invalid liquidity ratio");
         if (maxPositionSize == 0) revert PositionSizeTooLarge();
         _validatePairMaxTP(info.maxTP);
 
         // Update total ratio
-        totalOIRatio = totalOIRatio - info.oiRatio + oiRatio;
+        totalLiquidityRatio = totalLiquidityRatio - info.liquidityRatio + liquidityRatio;
         
-        info.oiRatio = oiRatio;
+        info.liquidityRatio = liquidityRatio;
         info.maxPositionSize = maxPositionSize;
         info.minLeverage = minLeverage;
         info.maxLeverage = maxLeverage;
 
-        emit PairConfigUpdated(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage);
+        emit PairConfigUpdated(pairs, liquidityRatio, maxPositionSize, minLeverage, maxLeverage);
     }
 
     /**
@@ -1260,21 +1265,11 @@ contract OneClickPerpDex is ReentrancyGuard {
         string calldata pairs,
         uint256 maxTP
     ) external onlyOwner {
-        PairInfo storage info = pairInfo[pairs];
+        PairInfo storage info = _pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
         _validatePairMaxTP(maxTP);
 
         info.maxTP = maxTP;
-
-        for (uint256 i = 0; i < allPairs.length; i++) {
-            if (
-                keccak256(bytes(allPairs[i].name)) ==
-                keccak256(bytes(pairs))
-            ) {
-                allPairs[i].maxTP = maxTP;
-                break;
-            }
-        }
 
         emit PairMaxTPUpdated(pairs, maxTP);
     }
@@ -1285,7 +1280,7 @@ contract OneClickPerpDex is ReentrancyGuard {
      * @param active True to activate, false to deactivate
      */
     function setPairActive(string calldata pairs, bool active) external onlyOwner {
-        PairInfo storage info = pairInfo[pairs];
+        PairInfo storage info = _pairInfo[pairs];
         require(bytes(info.name).length > 0, "Pair does not exist");
         
         info.active = active;
@@ -1294,7 +1289,7 @@ contract OneClickPerpDex is ReentrancyGuard {
 
     /// @notice Freezes every trading action for one pair except TP/SL edits.
     function setPairPaused(string calldata pairs, bool paused) external onlyOwner {
-        require(bytes(pairInfo[pairs].name).length > 0, "Pair does not exist");
+        require(bytes(_pairInfo[pairs].name).length > 0, "Pair does not exist");
         pairPaused[pairs] = paused;
         emit PairPaused(pairs, paused);
     }
@@ -1307,7 +1302,7 @@ contract OneClickPerpDex is ReentrancyGuard {
     /**
      * @notice Add a new trading pair (owner only)
      * @param pairs Trading pair name
-     * @param oiRatio OI ratio weight
+     * @param liquidityRatio Liquidity allocation weight
      * @param maxPositionSize Max position size in USDC
      * @param minLeverage Minimum leverage
      * @param maxLeverage Maximum leverage
@@ -1315,27 +1310,27 @@ contract OneClickPerpDex is ReentrancyGuard {
      */
     function addPair(
         string calldata pairs,
-        uint256 oiRatio,
+        uint256 liquidityRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage,
         uint256 maxTP
     ) external onlyOwner {
-        require(bytes(pairInfo[pairs].name).length == 0, "Pair already exists");
+        require(bytes(_pairInfo[pairs].name).length == 0, "Pair already exists");
         if (
             minLeverage == 0 ||
             maxLeverage == 0 ||
             minLeverage > maxLeverage
         ) revert InvalidLeverage();
-        require(oiRatio > 0, "Invalid OI ratio");
+        require(liquidityRatio > 0, "Invalid liquidity ratio");
         if (maxPositionSize == 0) revert PositionSizeTooLarge();
 
-        _addPair(pairs, oiRatio, maxPositionSize, minLeverage, maxLeverage, maxTP);
+        _addPair(pairs, liquidityRatio, maxPositionSize, minLeverage, maxLeverage, maxTP);
     }
 
     event PairConfigUpdated(
         string pairs,
-        uint256 maxOIPercentage,
+        uint256 liquidityRatio,
         uint256 maxPositionSize,
         uint256 minLeverage,
         uint256 maxLeverage
@@ -1441,8 +1436,11 @@ contract OneClickPerpDex is ReentrancyGuard {
         }
     }
 
-    function getAllPairs() external view returns (PairInfo[] memory) {
-        return allPairs;
+    function getAllPairs() external view returns (PairInfo[] memory pairs) {
+        pairs = new PairInfo[](pairNames.length);
+        for (uint256 i; i < pairs.length; i++) {
+            pairs[i] = pairInfo(pairNames[i]);
+        }
     }
 
     function getAllUsers() external view returns (address[] memory) {
@@ -1457,45 +1455,75 @@ contract OneClickPerpDex is ReentrancyGuard {
         return address(usdc);
     }
 
+    /// @notice Pair configuration with available liquidity calculated from current LP capital.
+    function pairInfo(string memory pairs) public view returns (PairInfo memory info) {
+        info = _pairInfo[pairs];
+        uint256 longMargin;
+        uint256 shortMargin;
+        (,, longMargin, shortMargin,,,, info.availableLiquidity) = getAvailableLiquidity(pairs);
+        info.usedLiquidity = longMargin + shortMargin;
+    }
+
+    function allPairs(uint256 index) external view returns (PairInfo memory) {
+        return pairInfo(pairNames[index]);
+    }
+
+    /// @notice Open interest statistics in leveraged notional collateral units.
+    function getOpenInterest(string calldata pairs)
+        external view returns (uint256 longOI, uint256 shortOI, uint256 totalOI)
+    {
+        PairInfo storage info = _pairInfo[pairs];
+        longOI = info.currentLongOI;
+        shortOI = info.currentShortOI;
+        totalOI = longOI + shortOI;
+    }
+
     /**
-     * @notice Get available OI for a trading pair
+     * @notice Available Liquidity derived from the pair's allocation weight and maxTP.
      * @param pairs Trading pair name (e.g., "BTC_USD")
-     * @return maxOIPerSide Maximum OI allowed per side (long or short)
-     * @return currentLongOI Current long OI
-     * @return currentShortOI Current short OI
-     * @return availableLongOI Available OI for long positions
-     * @return availableShortOI Available OI for short positions
-     * @return maxPositionSize Maximum position size allowed
+     * @return allocatedLiquidity Current LP capital allocated to this pair
+     * @return maxMarginPerSide Maximum open margin per side at the current pair maxTP
+     * @return currentLongMargin Current open long margin
+     * @return currentShortMargin Current open short margin
+     * @return availableLongLiquidity Additional long margin, capped by global profit capacity
+     * @return availableShortLiquidity Additional short margin, capped by global profit capacity
+     * @return maxPositionSize Maximum leveraged notional size per position
+     * @return availableLiquidity Combined remaining margin capacity, capped by global profit capacity
      */
-    function getAvailableOI(string calldata pairs)
-        external
+    function getAvailableLiquidity(string memory pairs)
+        public
         view
         returns (
-            uint256 maxOIPerSide,
-            uint256 currentLongOI,
-            uint256 currentShortOI,
-            uint256 availableLongOI,
-            uint256 availableShortOI,
-            uint256 maxPositionSize
+            uint256 allocatedLiquidity,
+            uint256 maxMarginPerSide,
+            uint256 currentLongMargin,
+            uint256 currentShortMargin,
+            uint256 availableLongLiquidity,
+            uint256 availableShortLiquidity,
+            uint256 maxPositionSize,
+            uint256 availableLiquidity
         )
     {
-        PairInfo storage info = pairInfo[pairs];
+        PairInfo storage info = _pairInfo[pairs];
+        OpenMargins storage margins = pairOpenMargins[pairs];
         
         uint256 poolValue = getPoolValue();
         
-        if (totalOIRatio > 0) {
-            // Calculate max OI based on ratio: (poolValue * pairRatio) / totalRatio
-            uint256 maxAllowedOI = (poolValue * info.oiRatio) / totalOIRatio;
-            maxOIPerSide = maxAllowedOI / 2; // Split 50/50 between long and short
-        } else {
-            maxOIPerSide = 0;
-        }
+        allocatedLiquidity = totalLiquidityRatio > 0 ? (poolValue * info.liquidityRatio) / totalLiquidityRatio : 0;
+        maxMarginPerSide = _getMaxOpenMarginPerSide(info, poolValue);
         
-        currentLongOI = info.currentLongOI;
-        currentShortOI = info.currentShortOI;
+        currentLongMargin = margins.longMargin;
+        currentShortMargin = margins.shortMargin;
         
-        availableLongOI = maxOIPerSide > currentLongOI ? maxOIPerSide - currentLongOI : 0;
-        availableShortOI = maxOIPerSide > currentShortOI ? maxOIPerSide - currentShortOI : 0;
+        availableLongLiquidity = maxMarginPerSide > currentLongMargin ? maxMarginPerSide - currentLongMargin : 0;
+        availableShortLiquidity = maxMarginPerSide > currentShortMargin ? maxMarginPerSide - currentShortMargin : 0;
+
+        uint256 remainingProfit = poolValue > totalWorstCaseProfit ? poolValue - totalWorstCaseProfit : 0;
+        uint256 availableMargin = info.maxTP > 0 ? (remainingProfit * ONE) / info.maxTP : 0;
+        if (availableLongLiquidity > availableMargin) availableLongLiquidity = availableMargin;
+        if (availableShortLiquidity > availableMargin) availableShortLiquidity = availableMargin;
+        availableLiquidity = availableLongLiquidity + availableShortLiquidity;
+        if (availableLiquidity > availableMargin) availableLiquidity = availableMargin;
         
         maxPositionSize = info.maxPositionSize;
     }

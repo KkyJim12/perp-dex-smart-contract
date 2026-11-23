@@ -110,7 +110,7 @@ contract PerpDexTest is Test {
             address(mockPyth),
             address(lpToken)
         );
-        assertEq(emptyDex.totalOIRatio(), 0);
+        assertEq(emptyDex.totalLiquidityRatio(), 0);
     }
 
     function testInitialLpDepositMintsSameDisplayedTokenAmount() public {
@@ -199,9 +199,73 @@ contract PerpDexTest is Test {
         perpDex.closePosition(positionId, updateData);
 
         (, uint256 payout, ) = _positionData(0);
-        // 100 margin + 100 capped profit - 2% fee on the 100 profit.
-        assertEq(payout, 198e6);
-        assertEq(usdc.balanceOf(trader), (MARGIN * 9) + 198e6);
+        // 100 margin + 100 capped profit - 3.5% fee on the 100 profit.
+        assertEq(payout, 196_500_000);
+        assertEq(usdc.balanceOf(trader), (MARGIN * 9) + 196_500_000);
+        assertEq(perpDex.secondaryVaultBalance(), 1_500_000);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6 - 98e6);
+        assertEq(perpDex.vaultTotalPnL(), -98e6);
+        assertEq(perpDex.vaultTotalLoss(), 98e6);
+    }
+
+    function testFuzzProfitFeeSplitConservesFunds(bool isLong, uint64 priceMoveSeed) public {
+        uint256 priceMove = bound(uint256(priceMoveSeed), 1, ENTRY_PRICE / 2);
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, MARGIN, LEVERAGE, new bytes[](0), 0, 0);
+        (bytes32 positionId,,) = _positionData(0);
+        mockPyth.setPrice(isLong ? ENTRY_PRICE + priceMove : ENTRY_PRICE - priceMove);
+        vm.prank(trader);
+        perpDex.closePosition(positionId, new bytes[](0));
+
+        uint256 profit = (MARGIN * LEVERAGE * priceMove) / ENTRY_PRICE;
+        uint256 totalFee = (profit * 350) / 10_000;
+        uint256 platformFee = (profit * 150) / 10_000;
+        uint256 liquidityFee = totalFee - platformFee;
+        (, uint256 payout,) = _positionData(0);
+        assertEq(payout, MARGIN + profit - totalFee);
+        assertEq(perpDex.secondaryVaultBalance(), platformFee);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6 - profit + liquidityFee);
+        assertEq(perpDex.vaultTotalPnL(), int256(liquidityFee) - int256(profit));
+        assertEq(
+            perpDex.getPoolValue() + platformFee + usdc.balanceOf(trader),
+            100_000_000e6 + MARGIN * 10
+        );
+    }
+
+    function testFuzzLossAndBreakEvenHaveNoFee(bool isLong, bool breakEven) public {
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, MARGIN, LEVERAGE, new bytes[](0), 0, 0);
+        (bytes32 positionId,,) = _positionData(0);
+        uint256 priceMove = breakEven ? 0 : ENTRY_PRICE / 100;
+        mockPyth.setPrice(isLong ? ENTRY_PRICE - priceMove : ENTRY_PRICE + priceMove);
+        vm.prank(trader);
+        perpDex.closePosition(positionId, new bytes[](0));
+
+        uint256 loss = breakEven ? 0 : 10e6;
+        (, uint256 payout,) = _positionData(0);
+        assertEq(payout, MARGIN - loss);
+        assertEq(perpDex.secondaryVaultBalance(), 0);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6 + loss);
+        assertEq(perpDex.vaultTotalPnL(), int256(loss));
+    }
+
+    function testPlatformVaultWithdrawalDoesNotSpendLpCapital() public {
+        usdc.ownerMint(address(this), 10e6);
+        perpDex.depositSecondaryVault(10e6);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6);
+
+        perpDex.updatePairMaxTP("BTC_USD", 1e18);
+        _openLong(0);
+        (bytes32 positionId,,) = _positionData(0);
+        mockPyth.setPrice(60_000e8);
+        vm.prank(trader);
+        perpDex.closePosition(positionId, new bytes[](0));
+
+        assertEq(perpDex.secondaryVaultBalance(), 11_500_000);
+        perpDex.withdrawSecondaryVault(10e6);
+        assertEq(perpDex.secondaryVaultBalance(), 0);
+        assertEq(usdc.balanceOf(address(this)), 11_500_000);
+        assertEq(perpDex.getPoolValue(), 100_000_000e6 - 98e6);
     }
 
     function testFuzzPairMaxTPAllowsCloseDefaultAtMaxLeverage(bool isLong) public {
@@ -282,26 +346,148 @@ contract PerpDexTest is Test {
         assertEq(triggerPrice, hitTP ? tp : sl);
     }
 
-    function testWorstCaseProfitCapLimitsExposureToThirtyPercentOfPool() public {
+    function testFuzzWorstCaseProfitCapLimitsExposureToFullPool(bool isLong) public {
         (PerpDex limitedDex, ) = _deployLimitedDex(1_000e6);
+        limitedDex.updatePairConfig("BTC_USD", 20, 50_000e6, 2, 500);
 
         // At a 500% max TP, 100 USDC margin reserves 500 USDC of LP loss.
-        // The 1,000 USDC pool only permits 300 USDC of worst-case loss.
-        vm.prank(trader);
-        vm.expectRevert("Exceeds 30% worst-case loss limit");
+        // Two positions can reserve the full 1,000 USDC pool.
+        vm.startPrank(trader);
         limitedDex.openPosition(
             "BTC_USD",
-            true,
+            isLong,
             100e6,
-            2,
+            500,
             new bytes[](0),
             0,
             0
         );
+        vm.expectRevert(bytes(isLong ? "Insufficient long liquidity" : "Insufficient short liquidity"));
+        limitedDex.openPosition("BTC_USD", isLong, 1e6, 2, new bytes[](0), 0, 0);
+        vm.roll(block.number + 1);
+        limitedDex.openPosition("BTC_USD", !isLong, 100e6, 2, new bytes[](0), 0, 0);
+
+        assertEq(limitedDex.totalWorstCaseProfit(), 1_000e6);
+        assertEq(limitedDex.getMaxWorstCaseProfit(), 1_000e6);
+        assertEq(limitedDex.getPoolValue(), 1_000e6);
+
+        vm.expectRevert("Exceeds 100% worst-case loss limit");
+        limitedDex.openPosition("BTC_USD", true, 1e6, 2, new bytes[](0), 0, 0);
+        vm.stopPrank();
+
+        assertEq(limitedDex.totalWorstCaseProfit(), 1_000e6);
+        // Lowering maxTP increases the nominal margin limit, but the old
+        // positions retain their reserved profit and exhaust global capacity.
+        limitedDex.updatePairMaxTP("BTC_USD", 1e18);
+        (,uint256 cap, uint256 longMargin, uint256 shortMargin, uint256 availableLong, uint256 availableShort,,) =
+            limitedDex.getAvailableLiquidity("BTC_USD");
+        assertEq(cap, 500e6);
+        assertEq(longMargin, 100e6);
+        assertEq(shortMargin, 100e6);
+        assertEq(availableLong, 0);
+        assertEq(availableShort, 0);
+        assertEq(limitedDex.pairInfo("BTC_USD").availableLiquidity, 0);
+        assertEq(limitedDex.pairInfo("BTC_USD").usedLiquidity, 200e6);
+    }
+
+    function testFuzzNotionalOIAndMarginLiquidityReleasedOnCloseAndLiquidation(bool isLong, bool shouldLiquidate) public {
+        perpDex.updatePairConfig("BTC_USD", 20, 50_000e6, 2, 500);
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, 50e6, 500, new bytes[](0), 0, 0);
+        vm.roll(block.number + 1);
+        vm.prank(trader);
+        perpDex.openPosition("BTC_USD", isLong, 50e6, 2, new bytes[](0), 0, 0);
+
+        (uint256 allocated, uint256 cap, uint256 longMargin, uint256 shortMargin, uint256 availableLong, uint256 availableShort,,) =
+            perpDex.getAvailableLiquidity("BTC_USD");
+        assertEq(allocated, 100_000_000e6);
+        assertEq(cap, 10_000_000e6);
+        assertEq(isLong ? longMargin : shortMargin, 100e6);
+        assertEq(isLong ? availableLong : availableShort, cap - 100e6);
+        assertEq(isLong ? availableShort : availableLong, cap);
+        assertEq(perpDex.totalWorstCaseProfit(), 500e6);
+        assertEq(perpDex.pairInfo("BTC_USD").availableLiquidity, cap * 2 - 100e6);
+        assertEq(perpDex.pairInfo("BTC_USD").usedLiquidity, 100e6);
+        assertEq(perpDex.allPairs(0).usedLiquidity, 100e6);
+
+        (uint256 longOI, uint256 shortOI, uint256 totalOI) = perpDex.getOpenInterest("BTC_USD");
+        assertEq(isLong ? longOI : shortOI, 25_100e6);
+        assertEq(isLong ? shortOI : longOI, 0);
+        assertEq(totalOI, 25_100e6);
+
+        (bytes32 positionId,,) = _positionData(0);
+        if (shouldLiquidate) {
+            mockPyth.setPrice(isLong ? 49_000e8 : 51_000e8);
+            perpDex.liquidate(trader, positionId, new bytes[](0));
+        } else {
+            vm.prank(trader);
+            perpDex.closePosition(positionId, new bytes[](0));
+        }
+
+        (,, longMargin, shortMargin,,,,) = perpDex.getAvailableLiquidity("BTC_USD");
+        assertEq(isLong ? longMargin : shortMargin, 50e6);
+        assertEq(perpDex.pairInfo("BTC_USD").usedLiquidity, 50e6);
+        assertEq(perpDex.totalWorstCaseProfit(), 250e6);
+        (longOI, shortOI, totalOI) = perpDex.getOpenInterest("BTC_USD");
+        assertEq(isLong ? longOI : shortOI, 100e6);
+        assertEq(totalOI, 100e6);
+
+        mockPyth.setPrice(ENTRY_PRICE);
+        (positionId,,) = _positionData(1);
+        vm.prank(trader);
+        perpDex.closePosition(positionId, new bytes[](0));
+        (,, longMargin, shortMargin,,,,) = perpDex.getAvailableLiquidity("BTC_USD");
+        assertEq(longMargin, 0);
+        assertEq(shortMargin, 0);
+        assertEq(perpDex.pairInfo("BTC_USD").usedLiquidity, 0);
+        assertEq(perpDex.totalWorstCaseProfit(), 0);
+        (longOI, shortOI, totalOI) = perpDex.getOpenInterest("BTC_USD");
+        assertEq(longOI, 0);
+        assertEq(shortOI, 0);
+        assertEq(totalOI, 0);
+    }
+
+    function testAvailableLiquidityUsesPairWeightAndMaxTP() public {
+        perpDex.addPair("ETH_USD", bytes32(uint256(2)), 20, 50_000e6, 2, 500, 10e18);
+        (uint256 btcAllocation, uint256 btcCap,,,,,,) = perpDex.getAvailableLiquidity("BTC_USD");
+        (uint256 ethAllocation, uint256 ethCap,,,,,,) = perpDex.getAvailableLiquidity("ETH_USD");
+        assertEq(btcAllocation, 50_000_000e6);
+        assertEq(ethAllocation, 50_000_000e6);
+        assertEq(btcCap, 5_000_000e6);
+        assertEq(ethCap, 2_500_000e6);
+
+        (,uint256 unknownCap,,, uint256 availableLong, uint256 availableShort,,) = perpDex.getAvailableLiquidity("UNKNOWN");
+        assertEq(unknownCap, 0);
+        assertEq(availableLong, 0);
+        assertEq(availableShort, 0);
+    }
+
+    function testPairInfoLiquidityTracksDepositsRatiosAndMaxTP() public {
+        perpDex.addPair("ETH_USD", bytes32(uint256(2)), 20, 50_000e6, 2, 500, 10e18);
+        assertEq(perpDex.pairInfo("BTC_USD").availableLiquidity, 10_000_000e6);
+        assertEq(perpDex.pairInfo("ETH_USD").availableLiquidity, 5_000_000e6);
+
+        perpDex.updatePairConfig("BTC_USD", 60, 50_000e6, 2, 500);
+        assertEq(perpDex.totalLiquidityRatio(), 80);
+        assertEq(perpDex.pairInfo("BTC_USD").liquidityRatio, 60);
+        assertEq(perpDex.pairInfo("BTC_USD").availableLiquidity, 15_000_000e6);
+        assertEq(perpDex.pairInfo("ETH_USD").availableLiquidity, 2_500_000e6);
+
+        perpDex.updatePairMaxTP("ETH_USD", 5e18);
+        assertEq(perpDex.pairInfo("ETH_USD").availableLiquidity, 5_000_000e6);
+
+        usdc.ownerMint(address(this), 1_000e6);
+        perpDex.depositLP(1_000e6);
+        PerpDex.PairInfo memory btc = perpDex.allPairs(0);
+        PerpDex.PairInfo memory eth = perpDex.allPairs(1);
+        assertEq(btc.liquidityRatio, 60);
+        assertEq(btc.availableLiquidity, 15_000_150e6);
+        assertEq(eth.maxTP, 5e18);
+        assertEq(eth.availableLiquidity, 5_000_050e6);
     }
 
     function testTpCloseAtThirtyPercentDrawdownPausesNewTrading() public {
-        (PerpDex limitedDex, ) = _deployLimitedDex(1_000e6);
+        (PerpDex limitedDex, ) = _deployLimitedDex(980e6);
 
         vm.prank(trader);
         limitedDex.openPosition(
@@ -322,7 +508,9 @@ contract PerpDexTest is Test {
 
         assertTrue(limitedDex.tradingPaused());
         assertTrue(limitedDex.pairPaused("BTC_USD"));
-        assertEq(limitedDex.getPoolValue(), 700e6);
+        // 300 USDC gross profit minus 6 USDC retained by LPs is exactly
+        // 30% of the 980 USDC starting pool.
+        assertEq(limitedDex.getPoolValue(), 686e6);
 
         vm.prank(trader);
         vm.expectRevert("Trading paused");

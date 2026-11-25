@@ -10,3 +10,6 @@
 [submodule "lib/fhevm-solidity"]
 	path = lib/fhevm-solidity
 	url = https://github.com/zama-ai/fhevm-solidity
+[submodule "lib/pull-oracle-consumer"]
+	path = lib/pull-oracle-consumer
+	url = https://github.com/oracle-atlas/pull-oracle-consumer

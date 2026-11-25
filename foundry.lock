@@ -8,6 +8,9 @@
   "lib/openzeppelin-contracts": {
     "rev": "c64a1edb67b6e3f4a15cca8909c9482ad33a02b0"
   },
+  "lib/pull-oracle-consumer": {
+    "rev": "a8f5b14036ed05f25dcebb81546bac600e138a34"
+  },
   "lib/pyth-sdk-solidity": {
     "rev": "11d6bcfc2e56885535a9a8e3c8417847cb20be14"
   }

@@ -3,6 +3,25 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/../.."
 
+# Recovery must be explicit: resuming preserves the saved transaction plan,
+# while starting fresh archives it and creates a new deployment.
+DEPLOYMENT_MODE=""
+case "${1:-}" in
+    "") ;;
+    --resume|--start-fresh) DEPLOYMENT_MODE="$1"; shift ;;
+    -h|--help)
+        echo "Usage: bash script/deploy/deploy-all.sh [--resume|--start-fresh]"
+        echo "  --resume       Continue the saved deployment without simulating again."
+        echo "  --start-fresh  Archive the saved deployment and deploy new contracts."
+        exit 0
+        ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+esac
+if [ "$#" -ne 0 ]; then
+    echo "Use only one deployment mode: --resume or --start-fresh." >&2
+    exit 1
+fi
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -48,12 +67,20 @@ if ! command -v cast >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v forge >/dev/null 2>&1; then
+    echo -e "${RED}forge is not installed or not on PATH${NC}" >&2
+    exit 1
+fi
+
 if [ -z "${CHAIN_ID:-}" ]; then
     echo -e "${RED}CHAIN_ID not set in .env${NC}"
     exit 1
 fi
 
-ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"
+if ! ACTUAL_CHAIN_ID="$(cast chain-id --rpc-url "$RPC_URL")"; then
+    echo -e "${RED}Could not read chain ID from RPC${NC}" >&2
+    exit 1
+fi
 if [ "$ACTUAL_CHAIN_ID" != "$CHAIN_ID" ]; then
     echo -e "${RED}RPC returned chain ID ${ACTUAL_CHAIN_ID}; expected CHAIN_ID ${CHAIN_ID}${NC}"
     exit 1
@@ -69,16 +96,25 @@ echo -e "${BLUE}RPC URL: $RPC_URL${NC}"
 echo ""
 
 # Ask for confirmation
-echo -e "${YELLOW}This will deploy:${NC}"
-echo "  1. MockUSDC (or use existing USDC)"
-echo "  2. ppUSDC (Main PerpDex LP Token)"
-echo "  3. Main PerpDex"
-echo "  4. ocUSDC (OneClick PerpDex LP Token)"
-echo "  5. OneClick PerpDex"
-echo "  6. opUSDC (Options AMM LP Token)"
-echo "  7. Options AMM"
-echo "  8. Prediction Market AMM and its pmUSDC LP Token"
-echo "     Prediction edge: ${PREDICTION_FEE_BPS:-300} bps; BTC/ETH/SOL feeds"
+if [ "$DEPLOYMENT_MODE" = "--resume" ]; then
+    echo -e "${YELLOW}Resuming the saved deployment; its addresses and transactions will be reused.${NC}"
+    echo "The saved transaction nonces must still match the deployer's on-chain nonce."
+else
+    if [ "$DEPLOYMENT_MODE" = "--start-fresh" ]; then
+        echo -e "${YELLOW}Starting fresh: the old broadcast will be archived and new contracts deployed.${NC}"
+        echo "Previously deployed contracts remain on-chain. New addresses must be saved after success."
+    fi
+    echo -e "${YELLOW}This will deploy:${NC}"
+    echo "  1. MockUSDC (or use existing USDC)"
+    echo "  2. ppUSDC (Main PerpDex LP Token)"
+    echo "  3. Main PerpDex"
+    echo "  4. ocUSDC (OneClick PerpDex LP Token)"
+    echo "  5. OneClick PerpDex"
+    echo "  6. opUSDC (Options AMM LP Token)"
+    echo "  7. Options AMM"
+    echo "  8. Prediction Market AMM and its pmUSDC LP Token"
+    echo "     Prediction edge: ${PREDICTION_FEE_BPS:-300} bps; BTC/ETH/SOL feeds"
+fi
 echo ""
 read -p "Continue with deployment? (y/n) " -n 1 -r
 echo ""
@@ -95,11 +131,15 @@ echo -e "${BLUE}====================================${NC}"
 echo ""
 
 # Run deployment
-forge script script/DeployAll.s.sol \
-    --rpc-url "$RPC_URL" \
-    --broadcast \
-    --slow \
-    -vvv
+FORGE_ARGS=(script script/DeployAll.s.sol --rpc-url "$RPC_URL" --broadcast --slow -vvv)
+if [ -n "$DEPLOYMENT_MODE" ]; then
+    FORGE_ARGS+=("$DEPLOYMENT_MODE")
+fi
+if [ "$DEPLOYMENT_MODE" = "--resume" ]; then
+    # Resume skips run(), so vm.startBroadcast(PRIVATE_KEY) cannot load the signer.
+    FORGE_ARGS+=(--private-key "$PRIVATE_KEY")
+fi
+forge "${FORGE_ARGS[@]}"
 
 # Check if deployment was successful
 if [ $? -eq 0 ]; then
@@ -109,7 +149,8 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}====================================${NC}"
     echo ""
     echo -e "${YELLOW}Next steps:${NC}"
-    echo "1. Copy the deployed addresses from above to your .env file"
+    echo "1. Save addresses from confirmed receipts in broadcast/DeployAll.s.sol/${CHAIN_ID}/run-latest.json to .env"
+    echo "   For pmUSDC, read shareToken() from the confirmed PredictionMarketAMM address."
     echo "2. Authorize backend address for OneClick PerpDex"
     echo "3. Verify contracts: bash script/deploy/verify-all.sh"
     echo "4. Create options markets and prediction rounds separately"
@@ -121,5 +162,10 @@ else
     echo -e "${RED}====================================${NC}"
     echo ""
     echo "Check the error messages above for details"
+    echo "For an unfinished broadcast, inspect its receipts and the deployer's nonce, then use:"
+    echo "  bash script/deploy/deploy-all.sh --resume"
+    echo "If recovery is impossible and a new deployment is intended, use:"
+    echo "  bash script/deploy/deploy-all.sh --start-fresh"
+    echo "Do not save addresses printed by a failed simulation as deployed addresses."
     exit 1
 fi

@@ -7,6 +7,12 @@ execution for the existing PerpDex, PredictionMarketAMM, and OptionsAMM. Trades
 and payouts remain attached to the user's existing EOA. See
 [deployment, wallet integration, and tests](docs/eip7702.md).
 
+## PerpDex with AtlasOracle
+
+`PerpDexAtlas` is a separate vault based on PerpDex using AtlasOracle's signed
+pull payloads. It has a dedicated deployment script and LP token. See
+[Atlas deployment, feed configuration, and transaction integration](docs/perpdex-atlas.md).
+
 ## Deploy and verify all markets
 
 Configure `.env` using `.env.example`, then run:
@@ -16,6 +22,24 @@ bash script/deploy/deploy-all.sh
 # Copy all printed contract addresses into .env before verification.
 bash script/deploy/verify-all.sh
 ```
+
+If Foundry reports an unfinished previous broadcast, inspect
+`broadcast/DeployAll.s.sol/<CHAIN_ID>/run-latest.json` and the deployer's on-chain
+nonce before choosing a recovery mode:
+
+```bash
+# Continue the saved transactions (requires their nonces to remain valid).
+bash script/deploy/deploy-all.sh --resume
+# Archive the old broadcast and deploy a new set of contracts.
+bash script/deploy/deploy-all.sh --start-fresh
+```
+
+Starting fresh leaves any previously deployed contracts on-chain. Addresses
+printed during simulation are only predictions; after a failed broadcast, use
+confirmed deployment receipts to identify actual contracts. On resume, use the
+saved broadcast's confirmed addresses rather than output from a later simulation.
+Read `shareToken()` on the confirmed PredictionMarketAMM to obtain its `pmUSDC`
+address, which is created inside the constructor.
 
 Deploy-all includes PerpDex, OneClickPerpDex, OptionsAMM with its wired
 `opUSDC` token, and PredictionMarketAMM with its constructor-created `pmUSDC`

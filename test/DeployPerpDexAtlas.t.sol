@@ -7,19 +7,31 @@ import {PerpDexAtlas} from "../src/PerpDexAtlas.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {ppUSDC} from "../src/ppUSDC.sol";
 
+contract PerpDexAtlasDeploymentFixture is DeployPerpDexAtlas {
+    address internal immutable fixtureUSDC;
+    address internal immutable fixtureSigner;
+
+    constructor(address usdc, address signer) {
+        fixtureUSDC = usdc;
+        fixtureSigner = signer;
+    }
+
+    function _deploymentConfig() internal view override returns (uint256, address, address, uint256) {
+        return (1, fixtureUSDC, fixtureSigner, 45);
+    }
+}
+
 contract DeployPerpDexAtlasTest is Test {
     DeployPerpDexAtlas internal deployment;
     MockUSDC internal usdc;
     address internal signer;
 
     function setUp() public {
-        deployment = DeployPerpDexAtlas(deployCode("DeployPerpDexAtlas.s.sol:DeployPerpDexAtlas"));
         usdc = new MockUSDC();
         signer = makeAddr("atlas-signer");
-        vm.setEnv("PRIVATE_KEY", "1");
-        vm.setEnv("USDC_ADDRESS", vm.toString(address(usdc)));
-        vm.setEnv("ATLAS_SIGNER", vm.toString(signer));
-        vm.setEnv("ATLAS_MAX_PRICE_AGE", "45");
+        deployment = DeployPerpDexAtlas(
+            deployCode("DeployPerpDexAtlas.t.sol:PerpDexAtlasDeploymentFixture", abi.encode(address(usdc), signer))
+        );
     }
 
     function testDeployIsolatedVaultAndWireFreshLpToken() public {

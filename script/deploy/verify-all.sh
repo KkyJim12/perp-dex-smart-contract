@@ -143,7 +143,7 @@ require_address PYTH_ADDRESS
 require_address OCUSDC_ADDRESS
 require_address ONECLICK_PERPDEX_ADDRESS
 require_address OPUSDC_ADDRESS
-require_address OPTIONS_AMM_ADDRESS
+require_address OPTION_AMM_ADDRESS
 require_address PMUSDC_ADDRESS
 require_address PREDICTION_MARKET_AMM_ADDRESS
 
@@ -279,15 +279,15 @@ verify_contract \
     "src/OneClickPerpDex.sol:OneClickPerpDex" \
     "$ONECLICK_ARGS"
 
-# OptionsAMM constructor: (usdc_, pyth_, opUSDC_)
-OPTIONS_ARGS="$(
+# OptionAMM constructor: (usdc_, pyth_, opUSDC_)
+OPTION_ARGS="$(
     cast abi-encode \
         "constructor(address,address,address)" \
         "$USDC_ADDRESS" \
         "$PYTH_ADDRESS" \
         "$OPUSDC_ADDRESS"
 )"
-verify_contract "$OPTIONS_AMM_ADDRESS" "src/OptionsAMM.sol:OptionsAMM" "$OPTIONS_ARGS"
+verify_contract "$OPTION_AMM_ADDRESS" "src/OptionAMM.sol:OptionAMM" "$OPTION_ARGS"
 
 # Read immutable prediction settings from the deployed vault so verification
 # still works if the deployment fee in .env has changed.

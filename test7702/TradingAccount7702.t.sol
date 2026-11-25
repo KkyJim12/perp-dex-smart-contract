@@ -8,7 +8,7 @@ import {MockUSDC} from "../src/MockUSDC.sol";
 import {PerpDex} from "../src/PerpDex.sol";
 import {ppUSDC} from "../src/ppUSDC.sol";
 import {PredictionMarketAMM} from "../src/PredictionMarketAMM.sol";
-import {OptionsAMM} from "../src/OptionsAMM.sol";
+import {OptionAMM} from "../src/OptionAMM.sol";
 import {opUSDC} from "../src/opUSDC.sol";
 import {PythStructs} from "lib/pyth-sdk-solidity/PythStructs.sol";
 
@@ -380,7 +380,7 @@ contract TradingAccount7702MarketsTest is Test {
     TradingAccount7702 private account;
     MockUSDC private usdc;
     PerpDex private perp;
-    OptionsAMM private options;
+    OptionAMM private option;
     PredictionMarketAMM private prediction;
     Account7702Oracle private oracle;
 
@@ -400,23 +400,23 @@ contract TradingAccount7702MarketsTest is Test {
         perpShares.setMinter(address(perp), true);
         perp.addPair("BTC_USD", bytes32(uint256(1)), 20, 50_000e6, 2, 100, 5e18);
         opUSDC optionShares = new opUSDC();
-        options = new OptionsAMM(address(usdc), address(oracle), address(optionShares));
-        optionShares.setOptionsAMM(address(options));
-        options.addPair("BTC_USD", bytes32(uint256(1)));
+        option = new OptionAMM(address(usdc), address(oracle), address(optionShares));
+        optionShares.setOptionAMM(address(option));
+        option.addPair("BTC_USD", bytes32(uint256(1)));
         prediction = new PredictionMarketAMM(address(usdc), address(oracle), 300);
         prediction.addPair("BTC_USD", bytes32(uint256(1)));
         usdc.ownerMint(address(this), 300_000e6);
         usdc.approve(address(perp), 100_000e6);
         perp.depositLP(100_000e6);
-        usdc.approve(address(options), 100_000e6);
-        options.deposit(100_000e6, options.previewDeposit(100_000e6));
+        usdc.approve(address(option), 100_000e6);
+        option.deposit(100_000e6, option.previewDeposit(100_000e6));
         usdc.approve(address(prediction), 100_000e6);
         prediction.deposit(100_000e6, 100_000e6);
         vm.warp(299);
-        options.createMarket(0, 300, 300, 100e18, 10_000, 300, true);
+        option.createMarket(0, 300, 300, 100e18, 10_000, 300, true);
         prediction.createMarket(0, 300, 300, 10_000);
         vm.warp(300);
-        options.openMarket{value: FEE}(0, new bytes[](0));
+        option.openMarket{value: FEE}(0, new bytes[](0));
         prediction.openMarket{value: FEE}(0, new bytes[](0));
         usdc.ownerMint(owner, 5_000e6);
     }
@@ -440,15 +440,15 @@ contract TradingAccount7702MarketsTest is Test {
             1_000_000,
             abi.encodeCall(prediction.buy, (0, true, 100e6, 100e18, 194e6, block.timestamp, new bytes[](0)))
         );
-        (uint256 premium,) = options.quoteBuy(0, 1_000e6, 100e18);
+        (uint256 premium,) = option.quoteBuy(0, 1_000e6, 100e18);
         calls[4] = TradingAccount7702.Call(
-            address(usdc), 0, 100_000, abi.encodeCall(usdc.approve, (address(options), premium))
+            address(usdc), 0, 100_000, abi.encodeCall(usdc.approve, (address(option), premium))
         );
         calls[5] = TradingAccount7702.Call(
-            address(options),
+            address(option),
             FEE,
             1_000_000,
-            abi.encodeCall(options.buy, (0, 1_000e6, 100e18, premium, block.timestamp, new bytes[](0)))
+            abi.encodeCall(option.buy, (0, 1_000e6, 100e18, premium, block.timestamp, new bytes[](0)))
         );
     }
 
@@ -464,14 +464,14 @@ contract TradingAccount7702MarketsTest is Test {
         assertTrue(id != bytes32(0));
         assertEq(margin, 100e6);
         assertEq(prediction.upBalance(0, owner), 194e6);
-        (uint256 premium,) = options.quoteBuy(0, 1_000e6, 100e18);
-        assertEq(options.optionBalance(0, owner), 1_000e6);
+        (uint256 premium,) = option.quoteBuy(0, 1_000e6, 100e18);
+        assertEq(option.optionBalance(0, owner), 1_000e6);
         assertEq(usdc.balanceOf(owner), 4_800e6 - premium);
         assertEq(usdc.balanceOf(sponsor), 0);
         assertEq(account.nonce(), 1);
         assertEq(usdc.allowance(owner, address(perp)), 0);
         assertEq(usdc.allowance(owner, address(prediction)), 0);
-        assertEq(usdc.allowance(owner, address(options)), 0);
+        assertEq(usdc.allowance(owner, address(option)), 0);
     }
 
     function testSponsoredAtomicTradingAcrossAllThreeMarkets() public {
@@ -492,8 +492,8 @@ contract TradingAccount7702MarketsTest is Test {
 
     function testOneRejectedTradeRollsBackAllThreeMarkets() public {
         TradingAccount7702.Call[] memory calls = _tradeCalls();
-        (uint256 premium,) = options.quoteBuy(0, 1_000e6, 100e18);
-        calls[5].data = abi.encodeCall(options.buy, (0, 1_000e6, 100e18, premium - 1, block.timestamp, new bytes[](0)));
+        (uint256 premium,) = option.quoteBuy(0, 1_000e6, 100e18);
+        calls[5].data = abi.encodeCall(option.buy, (0, 1_000e6, 100e18, premium - 1, block.timestamp, new bytes[](0)));
         uint256 expires = block.timestamp + 300;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(KEY, account.batchDigest(calls, 0, expires, sponsor, 3 * FEE));
         vm.expectRevert(
@@ -507,19 +507,19 @@ contract TradingAccount7702MarketsTest is Test {
         account.executeSigned{value: 3 * FEE}(calls, 0, expires, sponsor, abi.encodePacked(r, s, v));
         assertEq(perp.totalOpenMargin(), 0);
         assertEq(prediction.upBalance(0, owner), 0);
-        assertEq(options.reservedPayout(), 0);
+        assertEq(option.reservedPayout(), 0);
         assertEq(usdc.balanceOf(owner), 5_000e6);
         assertEq(account.nonce(), 0);
         assertEq(usdc.allowance(owner, address(perp)), 0);
     }
 
     function testSettlementPaysOriginalEOAAndPerpCanCloseThroughDelegation() public {
-        (uint256 premium,) = options.quoteBuy(0, 1_000e6, 100e18);
+        (uint256 premium,) = option.quoteBuy(0, 1_000e6, 100e18);
         _sponsoredTrade(_tradeCalls());
         vm.warp(600);
         oracle.setPrice(150);
         prediction.resolveMarket{value: FEE}(0, new bytes[](0));
-        options.finalizeMarket{value: FEE}(0, new bytes[](0));
+        option.finalizeMarket{value: FEE}(0, new bytes[](0));
         assertEq(usdc.balanceOf(owner), 5_494e6 - premium);
         (bytes32 id,,,,,,,,,,,,,,,) = perp.positions(owner, 0);
         TradingAccount7702.Call[] memory calls = new TradingAccount7702.Call[](1);
@@ -537,19 +537,19 @@ contract TradingAccount7702MarketsTest is Test {
 
     function testDelegatedPartialOptionSalePaysOriginalEOA() public {
         _sponsoredTrade(_tradeCalls());
-        (uint256 proceeds,) = options.quoteSell(0, 500e6, 100e18);
+        (uint256 proceeds,) = option.quoteSell(0, 500e6, 100e18);
         uint256 balance = usdc.balanceOf(owner);
         TradingAccount7702.Call[] memory calls = new TradingAccount7702.Call[](1);
         calls[0] = TradingAccount7702.Call(
-            address(options),
+            address(option),
             FEE,
             1_000_000,
-            abi.encodeCall(options.sell, (0, 500e6, 100e18, proceeds, block.timestamp, new bytes[](0)))
+            abi.encodeCall(option.sell, (0, 500e6, 100e18, proceeds, block.timestamp, new bytes[](0)))
         );
         vm.deal(owner, FEE);
         vm.prank(owner);
         account.execute(calls);
-        assertEq(options.optionBalance(0, owner), 500e6);
+        assertEq(option.optionBalance(0, owner), 500e6);
         assertEq(usdc.balanceOf(owner), balance + proceeds);
         assertEq(account.nonce(), 2);
     }

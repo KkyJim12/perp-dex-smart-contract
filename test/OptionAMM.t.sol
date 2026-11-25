@@ -4,10 +4,10 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {PythStructs} from "pyth-sdk-solidity/PythStructs.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
-import {OptionsAMM} from "../src/OptionsAMM.sol";
+import {OptionAMM} from "../src/OptionAMM.sol";
 import {opUSDC} from "../src/opUSDC.sol";
 
-contract OptionsMockPyth {
+contract OptionMockPyth {
     struct Update {
         bytes32 id;
         PythStructs.Price price;
@@ -53,7 +53,7 @@ contract OptionsMockPyth {
     }
 }
 
-contract OptionsTransferMock is MockUSDC {
+contract OptionTransferMock is MockUSDC {
     address public blockedRecipient;
     bool public chargeFee;
     bool public falseReturn;
@@ -92,11 +92,11 @@ contract OptionsTransferMock is MockUSDC {
     }
 }
 
-contract OptionsAMMTest is Test {
-    OptionsTransferMock usdc;
+contract OptionAMMTest is Test {
+    OptionTransferMock usdc;
     opUSDC shares;
-    OptionsAMM amm;
-    OptionsMockPyth pyth;
+    OptionAMM amm;
+    OptionMockPyth pyth;
     address lp = makeAddr("lp");
     address buyer = makeAddr("buyer");
     address bob = makeAddr("bob");
@@ -112,11 +112,11 @@ contract OptionsAMMTest is Test {
         vm.warp(1);
         vm.deal(address(this), 100 ether);
         vm.deal(backend, 1 ether);
-        usdc = new OptionsTransferMock();
+        usdc = new OptionTransferMock();
         shares = new opUSDC();
-        pyth = new OptionsMockPyth();
-        amm = new OptionsAMM(address(usdc), address(pyth), address(shares));
-        shares.setOptionsAMM(address(amm));
+        pyth = new OptionMockPyth();
+        amm = new OptionAMM(address(usdc), address(pyth), address(shares));
+        shares.setOptionAMM(address(amm));
         amm.authorizeBackend(backend, true);
         amm.addPair("BTC", BTC);
         usdc.ownerMint(lp, 10_000e6);
@@ -138,7 +138,7 @@ contract OptionsAMMTest is Test {
     function _data(uint256 value, uint256 time, uint256 previousTime) internal pure returns (bytes[] memory data) {
         data = new bytes[](1);
         data[0] =
-            abi.encode(OptionsMockPyth.Update(BTC, PythStructs.Price(int64(int256(value)), 0, -8, time), previousTime));
+            abi.encode(OptionMockPyth.Update(BTC, PythStructs.Price(int64(int256(value)), 0, -8, time), previousTime));
     }
 
     function _market(bool isCall) internal returns (uint256 id) {
@@ -165,7 +165,7 @@ contract OptionsAMMTest is Test {
     }
 
     function _finalize(uint256 id, uint256 spot) internal {
-        OptionsAMM.Market memory m = amm.getMarket(id);
+        OptionAMM.Market memory m = amm.getMarket(id);
         vm.warp(m.endTime);
         bytes[] memory data = _data(spot, m.endTime, m.endTime - 1);
         vm.prank(backend);
@@ -183,7 +183,7 @@ contract OptionsAMMTest is Test {
         assertEq(amm.optionBalance(id, buyer), 0);
         assertEq(amm.reservedPayout(), 0);
         assertEq(amm.vaultPayouts(), 500e6);
-        assertEq(uint256(amm.getMarket(id).status), uint256(OptionsAMM.Status.Finalized));
+        assertEq(uint256(amm.getMarket(id).status), uint256(OptionAMM.Status.Finalized));
         assertEq(amm.getMarket(id).closingPrice, 150e18);
     }
 
@@ -219,7 +219,7 @@ contract OptionsAMMTest is Test {
         assertEq(amm.vaultSaleProceeds(), a + b);
     }
 
-    function testSoldOptionsAreNotPaidAgain() public {
+    function testSoldOptionAreNotPaidAgain() public {
         uint256 id = _market(true);
         _buy(id, buyer, NOTIONAL, 100e8);
         _sell(id, buyer, NOTIONAL, 100e8);
@@ -229,7 +229,7 @@ contract OptionsAMMTest is Test {
         assertEq(amm.vaultPayouts(), 0);
     }
 
-    function testCannotSellAnotherUsersOptionsOrOversell() public {
+    function testCannotSellAnotherUsersOptionOrOversell() public {
         uint256 id = _market(true);
         _buy(id, buyer, NOTIONAL, 100e8);
         bytes[] memory data = _data(100e8, START, START - 1);
@@ -281,7 +281,7 @@ contract OptionsAMMTest is Test {
                 vm.expectRevert("Invalid start");
                 amm.createMarket(0, duration, start + 1, OPEN, 10_000, 300, isCall);
                 uint256 id = amm.createMarket(0, duration, start, OPEN, 10_000, 300, isCall);
-                OptionsAMM.Market memory m = amm.getMarket(id);
+                OptionAMM.Market memory m = amm.getMarket(id);
                 assertEq(m.startTime, start);
                 assertEq(m.endTime, start + duration);
                 vm.warp(start);
@@ -291,7 +291,7 @@ contract OptionsAMMTest is Test {
                 assertGt(premium, 0);
                 _finalize(id, isCall ? 150e8 : 50e8);
                 assertEq(usdc.balanceOf(buyer), balance + 500e6);
-                assertEq(uint256(amm.getMarket(id).status), uint256(OptionsAMM.Status.Finalized));
+                assertEq(uint256(amm.getMarket(id).status), uint256(OptionAMM.Status.Finalized));
                 assertEq(amm.reservedPayout(), 0);
             }
         }
@@ -321,7 +321,7 @@ contract OptionsAMMTest is Test {
         amm.openMarket{value: 1}(id, _data(100e8, START, START - 1));
         assertEq(amm.getMarket(id).strikePrice, OPEN);
         amm.cancelMarket(id);
-        assertEq(uint256(amm.getMarket(id).status), uint256(OptionsAMM.Status.Cancelled));
+        assertEq(uint256(amm.getMarket(id).status), uint256(OptionAMM.Status.Cancelled));
     }
 
     function testPairRemovalDoesNotChangeExistingMarkets() public {
@@ -380,11 +380,11 @@ contract OptionsAMMTest is Test {
         vm.prank(buyer);
         vm.expectRevert("Stale price");
         amm.buy{value: 1}(id, NOTIONAL, OPEN, type(uint256).max, START + 10, data);
-        data[0] = abi.encode(OptionsMockPyth.Update(BTC, PythStructs.Price(100e8, 2e8, -8, START + 10), START + 9));
+        data[0] = abi.encode(OptionMockPyth.Update(BTC, PythStructs.Price(100e8, 2e8, -8, START + 10), START + 9));
         vm.prank(buyer);
         vm.expectRevert("Uncertain price");
         amm.buy{value: 1}(id, NOTIONAL, OPEN, type(uint256).max, START + 10, data);
-        data[0] = abi.encode(OptionsMockPyth.Update(BTC, PythStructs.Price(100e8, 0, -19, START + 10), START + 9));
+        data[0] = abi.encode(OptionMockPyth.Update(BTC, PythStructs.Price(100e8, 0, -19, START + 10), START + 9));
         vm.prank(buyer);
         vm.expectRevert("Invalid price");
         amm.buy{value: 1}(id, NOTIONAL, OPEN, type(uint256).max, START + 10, data);

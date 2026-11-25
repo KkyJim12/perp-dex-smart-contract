@@ -110,8 +110,8 @@ else
     echo "  3. Main PerpDex"
     echo "  4. ocUSDC (OneClick PerpDex LP Token)"
     echo "  5. OneClick PerpDex"
-    echo "  6. opUSDC (Options AMM LP Token)"
-    echo "  7. Options AMM"
+    echo "  6. opUSDC (Option AMM LP Token)"
+    echo "  7. Option AMM"
     echo "  8. Prediction Market AMM and its pmUSDC LP Token"
     echo "     Prediction edge: ${PREDICTION_FEE_BPS:-300} bps; BTC/ETH/SOL feeds"
 fi
@@ -153,7 +153,7 @@ if [ $? -eq 0 ]; then
     echo "   For pmUSDC, read shareToken() from the confirmed PredictionMarketAMM address."
     echo "2. Authorize backend address for OneClick PerpDex"
     echo "3. Verify contracts: bash script/deploy/verify-all.sh"
-    echo "4. Create options markets and prediction rounds separately"
+    echo "4. Create option markets and prediction rounds separately"
     echo ""
 else
     echo ""

@@ -7,7 +7,7 @@ import "../src/ppUSDC.sol";
 import "../src/MockUSDC.sol";
 import "../src/OneClickPerpDex.sol";
 import "../src/ocUSDC.sol";
-import "../src/OptionsAMM.sol";
+import "../src/OptionAMM.sol";
 import "../src/opUSDC.sol";
 import "../src/PredictionMarketAMM.sol";
 import "./InitialPairConfig.sol";
@@ -20,7 +20,7 @@ contract DeployAll is Script, InitialPairConfig {
         address ocUSDCAddress,
         address oneClickPerpDexAddress,
         address opUSDCAddress,
-        address optionsAMMAddress,
+        address optionAMMAddress,
         address pmUSDCAddress,
         address predictionMarketAMMAddress
     ) {
@@ -113,16 +113,16 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("");
 
         // ================================================================
-        // STEP 8: Deploy and configure the isolated options vault
+        // STEP 8: Deploy and configure the isolated option vault
         // ================================================================
-        console.log("=== Step 8: Deploy Options AMM ===");
-        opUSDC optionsLpToken = new opUSDC();
-        opUSDCAddress = address(optionsLpToken);
-        OptionsAMM options = new OptionsAMM(usdcAddress, pythAddress, opUSDCAddress);
-        optionsAMMAddress = address(options);
-        optionsLpToken.setOptionsAMM(optionsAMMAddress);
+        console.log("=== Step 8: Deploy Option AMM ===");
+        opUSDC optionLpToken = new opUSDC();
+        opUSDCAddress = address(optionLpToken);
+        OptionAMM option = new OptionAMM(usdcAddress, pythAddress, opUSDCAddress);
+        optionAMMAddress = address(option);
+        optionLpToken.setOptionAMM(optionAMMAddress);
         console.log("opUSDC:", opUSDCAddress);
-        console.log("OptionsAMM:", optionsAMMAddress);
+        console.log("OptionAMM:", optionAMMAddress);
         console.log("");
 
         // ================================================================
@@ -177,9 +177,9 @@ contract DeployAll is Script, InitialPairConfig {
         console.log(oneClickPerpDexAddress);
         console.log("");
 
-        console.log("--- Options AMM System ---");
+        console.log("--- Option AMM System ---");
         console.log("opUSDC Token:", opUSDCAddress);
-        console.log("OptionsAMM:", optionsAMMAddress);
+        console.log("OptionAMM:", optionAMMAddress);
         console.log("");
 
         console.log("--- Prediction Market System ---");
@@ -275,17 +275,17 @@ contract DeployAll is Script, InitialPairConfig {
         console.log("OCUSDC_ADDRESS=", ocUSDCAddress);
         console.log("ONECLICK_PERPDEX_ADDRESS=", oneClickPerpDexAddress);
         console.log("OPUSDC_ADDRESS=", opUSDCAddress);
-        console.log("OPTIONS_AMM_ADDRESS=", optionsAMMAddress);
+        console.log("OPTION_AMM_ADDRESS=", optionAMMAddress);
         console.log("PMUSDC_ADDRESS=", pmUSDCAddress);
         console.log("PREDICTION_MARKET_AMM_ADDRESS=", predictionMarketAMMAddress);
         console.log("");
-        console.log("Verify all contracts (including options and prediction):");
+        console.log("Verify all contracts (including option and prediction):");
         console.log("bash script/deploy/verify-all.sh");
-        console.log("Create options markets and prediction rounds separately after deployment.");
+        console.log("Create option markets and prediction rounds separately after deployment.");
 
         return (
             usdcAddress, ppUSDCAddress, perpDexAddress, ocUSDCAddress, oneClickPerpDexAddress,
-            opUSDCAddress, optionsAMMAddress, pmUSDCAddress, predictionMarketAMMAddress
+            opUSDCAddress, optionAMMAddress, pmUSDCAddress, predictionMarketAMMAddress
         );
     }
 }

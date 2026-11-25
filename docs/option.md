@@ -1,31 +1,31 @@
-# Options AMM integration
+# Option AMM integration
 
 The vault sells capped, cash-settled European calls and puts. Users pay a USDC
 premium to buy a long and may sell all or part of that long back before the
-trading cutoff. Users cannot write naked short options. The vault is the
+trading cutoff. Users cannot write naked short option positions. The vault is the
 counterparty; opUSDC holders bear its realized profit and loss.
 
-This implementation changes the old options ABI and requires a new deployment
-of both OptionsAMM and its one-time-wired opUSDC token. Existing deployed
+This implementation changes the old option ABI and requires a new deployment
+of both OptionAMM and its one-time-wired opUSDC token. Existing deployed
 contracts cannot be upgraded or pointed at the new vault.
 
 ## Deployment and backend setup
 
 The constructor remains `constructor(address usdc,address pyth,address opUSDC)`.
 All three addresses must have code; USDC and opUSDC must have six decimals.
-DeployOptionsAMM and DeployAll wire opUSDC after creating the vault.
+DeployOptionAMM and DeployAll wire opUSDC after creating the vault.
 
 Record the new addresses in the environment file. Configure `BACKEND_ADDRESS`
 and run the existing initialization script, which now authorizes that backend
-on OptionsAMM when `OPTIONS_AMM_ADDRESS` is configured. Alternatively, the owner
+on OptionAMM when `OPTION_AMM_ADDRESS` is configured. Alternatively, the owner
 can call `authorizeBackend(backend,true)` directly. Authorization can be revoked.
 The owner remains able to operate rounds if the backend needs recovery.
 
-Seed BTC, ETH, and SOL using the new options target:
+Seed BTC, ETH, and SOL using the new option target:
 
 ```bash
-bash script/deploy/seed-initial-pairs.sh .env options --dry-run
-bash script/deploy/seed-initial-pairs.sh .env options
+bash script/deploy/seed-initial-pairs.sh .env option --dry-run
+bash script/deploy/seed-initial-pairs.sh .env option
 ```
 
 Pair IDs are permanent. The owner adds or removes pairs. Removing a pair stops
@@ -107,7 +107,7 @@ and the trade deadline in integrations. Trading stops five seconds before expiry
 ## Premium model and payoff
 
 For exact shared backend/frontend math, worked quotes, P/L and break-even,
-see [options pricing formulas](options-pricing.md) and [the shared JavaScript module](../sdk/options-math.mjs).
+see [option pricing formulas](option-pricing.md) and [the shared JavaScript module](../sdk/option-math.mjs).
 
 Premiums use an eight-step risk-neutral binomial approximation, zero interest,
 and the market's fixed volatility. With `dt = timeRemaining/(365 days * 8)`,
@@ -129,7 +129,7 @@ with a $100 strike pays 500 USDC at $150 and 1,000 USDC at $200 or higher.
 
 The model is an approximation rather than a calibrated Black-Scholes engine.
 An eight-step tree has finite terminal support; sufficiently far out-of-the-money
-options can quote zero and cannot be bought. Market volatility and spreads must
+option can quote zero and cannot be bought. Market volatility and spreads must
 be calibrated to each asset before production trading. The collateral cap
 ensures payout funding, not an expected LP profit or an accurate market price.
 
@@ -146,7 +146,7 @@ executeWithdrawal(address lp)
 Each open notional reserves its entire maximum payout, with reservations capped
 at 80% of assets excluding deferred claims. Selling releases the corresponding
 reserve. `vaultValue` subtracts both reserves and funded claims, so it is
-conservative while options are open and exact net equity after exposure closes.
+conservative while option positions are open and exact net equity after exposure closes.
 
 Deposits and direct withdrawals wait for all exposed markets to close.
 `previewDeposit` and `previewRedeem` use one virtual asset and one million

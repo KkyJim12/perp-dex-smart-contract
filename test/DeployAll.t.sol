@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {DeployAll} from "../script/DeployAll.s.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
-import {OptionsAMM} from "../src/OptionsAMM.sol";
+import {OptionAMM} from "../src/OptionAMM.sol";
 import {opUSDC} from "../src/opUSDC.sol";
 import {PredictionMarketAMM} from "../src/PredictionMarketAMM.sol";
 import {pmUSDC} from "../src/pmUSDC.sol";
@@ -42,7 +42,7 @@ contract DeployAllTest is Test {
     function _checkDeployment(address existingUSDC, uint256 fee) internal {
         (
             address usdc, address perpShares, address perp, address oneClickShares,
-            address oneClick, address optionsShares, address options,
+            address oneClick, address optionShares, address option,
             address predictionShares, address prediction
         ) = script.run();
 
@@ -51,12 +51,12 @@ contract DeployAllTest is Test {
         assertGt(perp.code.length, 0);
         assertGt(oneClick.code.length, 0);
 
-        assertEq(opUSDC(optionsShares).optionsAMM(), options);
-        assertEq(OptionsAMM(options).owner(), vm.addr(1));
-        assertEq(opUSDC(optionsShares).owner(), vm.addr(1));
-        assertEq(address(OptionsAMM(options).usdc()), usdc);
-        assertEq(address(OptionsAMM(options).pyth()), pyth);
-        assertEq(address(OptionsAMM(options).opUSDC()), optionsShares);
+        assertEq(opUSDC(optionShares).optionAMM(), option);
+        assertEq(OptionAMM(option).owner(), vm.addr(1));
+        assertEq(opUSDC(optionShares).owner(), vm.addr(1));
+        assertEq(address(OptionAMM(option).usdc()), usdc);
+        assertEq(address(OptionAMM(option).pyth()), pyth);
+        assertEq(address(OptionAMM(option).opUSDC()), optionShares);
 
         PredictionMarketAMM vault = PredictionMarketAMM(prediction);
         assertEq(vault.owner(), vm.addr(1));
@@ -68,8 +68,8 @@ contract DeployAllTest is Test {
         assertEq(vault.pairCount(), 0);
         assertEq(vault.marketCount(), 0);
 
-        assertTrue(optionsShares != perpShares && optionsShares != oneClickShares);
-        assertTrue(predictionShares != optionsShares && predictionShares != perpShares);
+        assertTrue(optionShares != perpShares && optionShares != oneClickShares);
+        assertTrue(predictionShares != optionShares && predictionShares != perpShares);
         assertTrue(predictionShares != oneClickShares);
     }
 }

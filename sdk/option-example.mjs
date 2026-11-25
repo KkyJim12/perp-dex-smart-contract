@@ -1,4 +1,4 @@
-import { quoteBuy, quoteSell, settlementPayout, parseUnits, formatUnits } from './options-math.mjs';
+import { quoteBuy, quoteSell, settlementPayout, parseUnits, formatUnits } from './option-math.mjs';
 
 // Demonstration inputs. In an application, read the market and timestamp from one chain block.
 const market = {

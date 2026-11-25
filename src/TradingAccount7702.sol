@@ -5,7 +5,7 @@ import {ECDSA} from "lib/openzeppelin-contracts/contracts/utils/cryptography/ECD
 
 /// @notice EIP-7702 delegation implementation for atomic approvals and market calls.
 /// @dev CALL preserves the delegated EOA as msg.sender in PerpDex, PredictionMarketAMM
-/// and OptionsAMM. No initializer, administrator, or shared custody is required.
+/// and OptionAMM. No initializer, administrator, or shared custody is required.
 contract TradingAccount7702 {
     struct Call {
         address target;

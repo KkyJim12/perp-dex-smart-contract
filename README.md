@@ -3,15 +3,20 @@
 ## EIP-7702 trading accounts
 
 `TradingAccount7702` adds atomic approval-and-trade batches and signed sponsored
-execution for the existing PerpDex, PredictionMarketAMM, and OptionsAMM. Trades
+execution for the existing PerpDex, PredictionMarketAMM, and OptionAMM. Trades
 and payouts remain attached to the user's existing EOA. See
 [deployment, wallet integration, and tests](docs/eip7702.md).
 
-## PerpDex with AtlasOracle
+## Markets with AtlasOracle
 
 `PerpDexAtlas` is a separate vault based on PerpDex using AtlasOracle's signed
 pull payloads. It has a dedicated deployment script and LP token. See
 [Atlas deployment, feed configuration, and transaction integration](docs/perpdex-atlas.md).
+
+`OptionAMMAtlas` and `PredictionMarketAMMAtlas` copy the existing option and
+prediction vaults with Atlas pull quotes and independent LP tokens. Opening and
+settlement require quotes stamped exactly at each scheduled boundary. See
+[Atlas option/prediction deployment and integration](docs/atlas-markets.md).
 
 ## Deploy and verify all markets
 
@@ -41,18 +46,18 @@ saved broadcast's confirmed addresses rather than output from a later simulation
 Read `shareToken()` on the confirmed PredictionMarketAMM to obtain its `pmUSDC`
 address, which is created inside the constructor.
 
-Deploy-all includes PerpDex, OneClickPerpDex, OptionsAMM with its wired
+Deploy-all includes PerpDex, OneClickPerpDex, OptionAMM with its wired
 `opUSDC` token, and PredictionMarketAMM with its constructor-created `pmUSDC`
-token. All use the same USDC; options and prediction have separate LP vaults.
+token. All use the same USDC; option and prediction have separate LP vaults.
 Set `DEPLOY_MOCK_USDC=false` and `USDC_ADDRESS` to use existing six-decimal USDC.
 
 Prediction deploys with an empty pair registry. Seed BTC, ETH, and SOL using
 the prediction seed target below. `PREDICTION_FEE_BPS` defaults to 300 (3%) and accepts 0–500;
 the fee is fixed at deployment. The configured Pyth oracle must support
-`parsePriceFeedUpdatesUnique`. Create options markets and prediction rounds
+`parsePriceFeedUpdatesUnique`. Create option markets and prediction rounds
 separately after deployment.
 
-Verification requires `OPUSDC_ADDRESS`, `OPTIONS_AMM_ADDRESS`, `PMUSDC_ADDRESS`,
+Verification requires `OPUSDC_ADDRESS`, `OPTION_AMM_ADDRESS`, `PMUSDC_ADDRESS`,
 and `PREDICTION_MARKET_AMM_ADDRESS` alongside the existing contract addresses.
 It reads the prediction fee from the deployed contract and verifies
 both new AMMs and both LP tokens using their respective constructor arguments.
@@ -295,14 +300,14 @@ bash script/deploy/initialize-deployment.sh .env
 When `DEPLOY_MOCK_USDC=true`, this mints
 `INITIAL_MOCK_USDC_MINT_AMOUNT` MockUSDC (default: 100,000,000 USDC) to the
 deployed owner. It authorizes the nonzero `BACKEND_ADDRESS` from the environment
-file as the OneClickPerpDex backend and, when `OPTIONS_AMM_ADDRESS` is configured,
-as the OptionsAMM backend. `PRIVATE_KEY` must still belong to the owner
+file as the OneClickPerpDex backend and, when `OPTION_AMM_ADDRESS` is configured,
+as the OptionAMM backend. `PRIVATE_KEY` must still belong to the owner
 who can perform initialization.
 Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
 
-## Options AMM vault
+## Option AMM vault
 
-`OptionsAMM` has scheduled call/put rounds, like the prediction vault. The owner
+`OptionAMM` has scheduled call/put rounds, like the prediction vault. The owner
 authorizes a backend to create, open, and finalize markets. Users buy longs for
 a dynamically priced USDC premium and can sell all or part back before expiry.
 Backend finalization authenticates one fixed Pyth expiry price and automatically
@@ -315,11 +320,11 @@ its USDC notional; total reserves are capped at 80% of assets excluding deferred
 claims. LP shares have donation protection, slippage limits, and queued exits
 that stop fresh purchases until withdrawals are processed.
 
-Deploy with `DeployOptionsAMM.s.sol`, authorize `BACKEND_ADDRESS` through the
+Deploy with `DeployOptionAMM.s.sol`, authorize `BACKEND_ADDRESS` through the
 initialization script, and seed pairs with
-`bash script/deploy/seed-initial-pairs.sh .env options`. Markets use 18-decimal
-USD strike units. This replaces the old options ABI and requires redeployment.
-See [backend lifecycle, trading interfaces, pricing limits, and LP integration](docs/options.md).
+`bash script/deploy/seed-initial-pairs.sh .env option`. Markets use 18-decimal
+USD strike units. This replaces the old option ABI and requires redeployment.
+See [backend lifecycle, trading interfaces, pricing limits, and LP integration](docs/option.md).
 
 ## LP risk circuit breaker
 

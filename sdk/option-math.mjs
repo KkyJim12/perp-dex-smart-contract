@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Dependency-free math for the current src/OptionsAMM.sol. All monetary math uses bigint.
+// Dependency-free math for the current src/OptionAMM.sol. All monetary math uses bigint.
 export const WAD = 10n ** 18n;
 export const USDC_UNIT = 10n ** 6n;
 export const BPS = 10_000n;

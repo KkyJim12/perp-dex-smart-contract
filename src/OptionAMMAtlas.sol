@@ -5,37 +5,23 @@ import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.so
 import {IERC20Metadata} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
-import {Ownable2Step} from "lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import {PythStructs} from "lib/pyth-sdk-solidity/PythStructs.sol";
+import {AtlasMarketOracle} from "./oracle/AtlasMarketOracle.sol";
 
-interface IOpUSDC is IERC20 {
+interface IAtlasOpUSDC is IERC20 {
     function mint(address to, uint256 amount) external;
     function burn(address from, uint256 amount) external;
-    function optionsAMM() external view returns (address);
+    function optionAMM() external view returns (address);
 }
 
-/// @dev The deployed oracle must support unique historical boundary parsing.
-interface IOptionsPyth {
-    function getUpdateFee(bytes[] calldata data) external view returns (uint256);
-    function updatePriceFeeds(bytes[] calldata data) external payable;
-    function getPriceNoOlderThan(bytes32 id, uint256 age) external view returns (PythStructs.Price memory);
-    function parsePriceFeedUpdatesUnique(bytes[] calldata data, bytes32[] calldata ids, uint64 minTime, uint64 maxTime)
-        external
-        payable
-        returns (PythStructs.PriceFeed[] memory);
-}
-
-/// @notice Capped European options vault: buy a long for a premium, or sell it back before expiry.
+/// @notice Capped European option vault: buy a long for a premium, or sell it back before expiry.
 /// @dev Cash/notionals have 6 decimals, USD prices 18. Eight-step binomial quotes assume zero interest.
-contract OptionsAMM is Ownable2Step, ReentrancyGuard {
+contract OptionAMMAtlas is AtlasMarketOracle, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant BPS = 10_000;
     uint256 public constant WAD = 1e18;
     uint256 public constant MAX_UTILIZATION_BPS = 8_000;
-    uint256 public constant MAX_CONFIDENCE_BPS = 100;
     uint256 public constant MAX_PRICE_AGE = 5;
     uint256 public constant MAX_TRADERS_PER_MARKET = 128;
     uint256 public constant MIN_NOTIONAL = 1e6;
@@ -56,7 +42,7 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
 
     struct Pair {
         string name;
-        bytes32 priceId;
+        bytes4 atlasFeedId;
         bool active;
     }
 
@@ -75,13 +61,12 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
     }
 
     IERC20 public immutable usdc;
-    IOptionsPyth public immutable pyth;
-    IOpUSDC public immutable opUSDC;
+    IAtlasOpUSDC public immutable opUSDC;
     Pair[] public pairs;
     Market[] private markets;
     mapping(address => bool) public authorizedBackends;
     mapping(bytes32 => bool) private activeNames;
-    mapping(bytes32 => bool) private activeFeeds;
+    mapping(bytes4 => bool) private activeFeeds;
     mapping(bytes32 => bool) public scheduled;
     mapping(uint256 => mapping(address => uint256)) public optionBalance;
     mapping(uint256 => address[]) public traders;
@@ -99,7 +84,7 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
     bool public tradingPaused;
 
     event BackendAuthorized(address indexed backend, bool authorized);
-    event PairAdded(uint256 indexed pairId, string name, bytes32 priceId);
+    event PairAdded(uint256 indexed pairId, string name, bytes4 atlasFeedId);
     event PairRemoved(uint256 indexed pairId);
     event MarketCreated(
         uint256 indexed marketId,
@@ -140,15 +125,14 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         _;
     }
 
-    constructor(address usdc_, address pyth_, address opUSDC_) Ownable(msg.sender) {
-        require(usdc_.code.length > 0 && pyth_.code.length > 0 && opUSDC_.code.length > 0, "Invalid contract");
+    constructor(address usdc_, address atlasSigner_, address opUSDC_) AtlasMarketOracle(atlasSigner_) {
+        require(usdc_.code.length > 0 && opUSDC_.code.length > 0, "Invalid contract");
         require(
             IERC20Metadata(usdc_).decimals() == 6 && IERC20Metadata(opUSDC_).decimals() == 6,
             "Tokens must have 6 decimals"
         );
         usdc = IERC20(usdc_);
-        pyth = IOptionsPyth(pyth_);
-        opUSDC = IOpUSDC(opUSDC_);
+        opUSDC = IAtlasOpUSDC(opUSDC_);
     }
 
     function authorizeBackend(address backend, bool authorized) external onlyOwner {
@@ -178,19 +162,19 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         return pairs.length;
     }
 
-    function priceIds(uint256 pairId) external view returns (bytes32) {
-        return pairs[pairId].priceId;
+    function atlasFeedIds(uint256 pairId) external view returns (bytes4) {
+        return pairs[pairId].atlasFeedId;
     }
 
-    function addPair(string calldata name, bytes32 priceId) external onlyOwner returns (uint256 pairId) {
-        require(bytes(name).length > 0 && priceId != bytes32(0), "Invalid pair");
+    function addPair(string calldata name, bytes4 atlasFeedId) external onlyOwner returns (uint256 pairId) {
+        require(bytes(name).length > 0 && atlasFeedId != bytes4(0), "Invalid pair");
         bytes32 nameHash = keccak256(bytes(name));
-        require(!activeNames[nameHash] && !activeFeeds[priceId], "Duplicate pair");
+        require(!activeNames[nameHash] && !activeFeeds[atlasFeedId], "Duplicate pair");
         activeNames[nameHash] = true;
-        activeFeeds[priceId] = true;
+        activeFeeds[atlasFeedId] = true;
         pairId = pairs.length;
-        pairs.push(Pair(name, priceId, true));
-        emit PairAdded(pairId, name, priceId);
+        pairs.push(Pair(name, atlasFeedId, true));
+        emit PairAdded(pairId, name, atlasFeedId);
     }
 
     function removePair(uint256 pairId) external onlyOwner {
@@ -198,7 +182,7 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         require(pair.active, "Pair inactive");
         pair.active = false;
         activeNames[keccak256(bytes(pair.name))] = false;
-        activeFeeds[pair.priceId] = false;
+        activeFeeds[pair.atlasFeedId] = false;
         emit PairRemoved(pairId);
     }
 
@@ -244,13 +228,13 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         emit MarketCreated(id, pairId, startTime, startTime + duration, strikePrice, isCall, volatilityBps, feeBps);
     }
 
-    function openMarket(uint256 id, bytes[] calldata data) external payable onlyOperator nonReentrant {
+    function openMarket(uint256 id) external onlyOperator nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Scheduled, "Not scheduled");
         require(
             block.timestamp >= m.startTime && block.timestamp <= m.startTime + ORACLE_WINDOW, "Opening window closed"
         );
-        m.openingPrice = _boundaryPrice(m.pairId, m.startTime, data);
+        m.openingPrice = _boundaryPrice(m.pairId, m.startTime);
         if (m.strikePrice == 0) m.strikePrice = m.openingPrice;
         m.status = Status.Trading;
         emit MarketOpened(id, m.openingPrice, m.strikePrice);
@@ -289,7 +273,7 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
 
     function deposit(uint256 assets, uint256 minShares) external nonReentrant returns (uint256 shares) {
         require(unresolvedExposureMarkets == 0, "Unresolved markets lock LPs");
-        require(opUSDC.optionsAMM() == address(this), "LP token not wired");
+        require(opUSDC.optionAMM() == address(this), "LP token not wired");
         require(assets > 0, "Zero assets");
         shares = previewDeposit(assets);
         require(shares > 0 && shares >= minShares, "Share slippage");
@@ -396,20 +380,17 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         proceeds = fair - fee;
     }
 
-    function buy(
-        uint256 id,
-        uint256 contracts,
-        uint256 currentPrice,
-        uint256 maxPremium,
-        uint256 deadline,
-        bytes[] calldata data
-    ) external payable nonReentrant returns (uint256 premium) {
+    function buy(uint256 id, uint256 contracts, uint256 currentPrice, uint256 maxPremium, uint256 deadline)
+        external
+        nonReentrant
+        returns (uint256 premium)
+    {
         require(block.timestamp <= deadline, "Deadline passed");
         require(queuedWithdrawalShares == 0, "LP withdrawals pending");
         require(opUSDC.totalSupply() > 0, "No LP liquidity");
         Market storage m = markets[id];
         _tradable(m);
-        uint256 price = _currentPrice(m, data);
+        uint256 price = _currentPrice(m);
         require(price == currentPrice, "Price mismatch");
         uint256 fee;
         (premium, fee) = quoteBuy(id, contracts, price);
@@ -435,21 +416,18 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Sell all or part of the caller's long back to the vault; no naked short positions.
-    function sell(
-        uint256 id,
-        uint256 contracts,
-        uint256 currentPrice,
-        uint256 minProceeds,
-        uint256 deadline,
-        bytes[] calldata data
-    ) external payable nonReentrant returns (uint256 proceeds) {
+    function sell(uint256 id, uint256 contracts, uint256 currentPrice, uint256 minProceeds, uint256 deadline)
+        external
+        nonReentrant
+        returns (uint256 proceeds)
+    {
         require(block.timestamp <= deadline, "Deadline passed");
         Market storage m = markets[id];
         _tradable(m);
         require(contracts >= MIN_NOTIONAL && contracts <= optionBalance[id][msg.sender], "Invalid contracts");
         uint256 remainder = optionBalance[id][msg.sender] - contracts;
         require(remainder == 0 || remainder >= MIN_NOTIONAL, "Dust remainder");
-        uint256 price = _currentPrice(m, data);
+        uint256 price = _currentPrice(m);
         require(price == currentPrice, "Price mismatch");
         uint256 fee;
         (proceeds, fee) = quoteSell(id, contracts, price);
@@ -466,10 +444,10 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
 
     /// @notice Backend authenticates one expiry price and automatically pays remaining holders.
     /// @dev Failed transfers become funded claims, preserving other payouts and LP exits.
-    function finalizeMarket(uint256 id, bytes[] calldata data) external payable onlyOperator nonReentrant {
+    function finalizeMarket(uint256 id) external onlyOperator nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Trading && block.timestamp >= m.endTime, "Not finalizable");
-        m.closingPrice = _boundaryPrice(m.pairId, m.endTime, data);
+        m.closingPrice = _boundaryPrice(m.pairId, m.endTime);
         m.status = Status.Finalized;
         if (m.outstanding != 0) --unresolvedExposureMarkets;
         reservedPayout -= m.outstanding;
@@ -532,40 +510,11 @@ contract OptionsAMM is Ownable2Step, ReentrancyGuard {
         require(usdc.balanceOf(address(this)) - beforeBalance == assets, "Unsupported transfer fee");
     }
 
-    function _boundaryPrice(uint256 pairId, uint64 timestamp, bytes[] calldata data) private returns (uint256) {
-        uint256 fee = pyth.getUpdateFee(data);
-        require(msg.value == fee, "Incorrect Pyth fee");
-        bytes32[] memory ids = new bytes32[](1);
-        ids[0] = pairs[pairId].priceId;
-        PythStructs.PriceFeed[] memory feeds =
-            pyth.parsePriceFeedUpdatesUnique{value: fee}(data, ids, timestamp, timestamp + ORACLE_WINDOW);
-        require(feeds.length == 1 && feeds[0].id == ids[0], "Wrong feed");
-        PythStructs.Price memory p = feeds[0].price;
-        require(
-            p.publishTime >= timestamp && p.publishTime <= timestamp + ORACLE_WINDOW
-                && p.publishTime <= block.timestamp,
-            "Invalid publish time"
-        );
-        return _normalizePrice(p);
+    function _boundaryPrice(uint256 pairId, uint64 timestamp) private returns (uint256) {
+        return _atlasBoundaryPrice(pairs[pairId].atlasFeedId, timestamp);
     }
 
-    function _currentPrice(Market storage m, bytes[] calldata data) private returns (uint256) {
-        uint256 fee = pyth.getUpdateFee(data);
-        require(msg.value == fee, "Incorrect Pyth fee");
-        pyth.updatePriceFeeds{value: fee}(data);
-        PythStructs.Price memory p = pyth.getPriceNoOlderThan(pairs[m.pairId].priceId, MAX_PRICE_AGE);
-        require(
-            p.publishTime >= m.startTime && p.publishTime <= block.timestamp
-                && block.timestamp - p.publishTime <= MAX_PRICE_AGE,
-            "Invalid publish time"
-        );
-        return _normalizePrice(p);
-    }
-
-    function _normalizePrice(PythStructs.Price memory p) private pure returns (uint256 price) {
-        require(p.price > 0 && p.expo >= -18 && p.expo <= 0, "Invalid price");
-        require(uint256(p.conf) * BPS <= uint256(uint64(p.price)) * MAX_CONFIDENCE_BPS, "Uncertain price");
-        price = uint256(uint64(p.price)) * 10 ** uint32(int32(18) + p.expo);
-        require(price <= MAX_PRICE, "Invalid price");
+    function _currentPrice(Market storage m) private returns (uint256) {
+        return _atlasSpotPrice(pairs[m.pairId].atlasFeedId, m.startTime, MAX_PRICE_AGE);
     }
 }

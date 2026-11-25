@@ -6,13 +6,13 @@ import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WAD, MAX_PRICE, optionValue, quoteBuy, quoteSell } from './options-math.mjs';
+import { WAD, MAX_PRICE, optionValue, quoteBuy, quoteSell } from './option-math.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const foundry = process.env.FOUNDRY_BIN ?? join(homedir(), '.foundry', 'bin');
 const executable = (name) => join(foundry, name + (process.platform === 'win32' ? '.exe' : ''));
 const signatures = [
-  'setOptionsAMM(address)', 'addPair(string,bytes32)',
+  'setOptionAMM(address)', 'addPair(string,bytes32)',
   'createMarket(uint256,uint64,uint64,uint256,uint256,uint256,bool)',
   'openMarket(uint256,bytes[])', 'optionValue(uint256,uint256)',
   'quoteBuy(uint256,uint256,uint256)', 'quoteSell(uint256,uint256,uint256)',
@@ -77,9 +77,9 @@ try {
   }
   const usdc = await deploy('out/MockUSDC.sol/MockUSDC.json');
   const shares = await deploy('out/opUSDC.sol/opUSDC.json');
-  const oracle = await deploy('out/OptionsAMM.t.sol/OptionsMockPyth.json');
-  const amm = await deploy('out/OptionsAMM.sol/OptionsAMM.json', [usdc, oracle, shares]);
-  await send(shares, fixed('setOptionsAMM(address)', [amm]));
+  const oracle = await deploy('out/OptionAMM.t.sol/OptionMockPyth.json');
+  const amm = await deploy('out/OptionAMM.sol/OptionAMM.json', [usdc, oracle, shares]);
+  await send(shares, fixed('setOptionAMM(address)', [amm]));
   const nameBytes = Buffer.from('BTC').toString('hex').padEnd(64, '0');
   await send(amm, selectors.get('addPair(string,bytes32)') + word(64) + word(1) + word(3) + nameBytes);
 

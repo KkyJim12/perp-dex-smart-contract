@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WAD, UINT256_MAX, optionValue, quoteBuy, quoteSell, settlementPayout,
-  normalizePythPrice, parseUnits, formatUnits, sqrtFloor, breakEvenPrice } from './options-math.mjs';
+  normalizePythPrice, parseUnits, formatUnits, sqrtFloor, breakEvenPrice } from './option-math.mjs';
 
 const market = { status: 1, endTime: 600n, strikePrice: 100n * WAD,
   volatilityBps: 10_000n, feeBps: 300n, isCall: true };

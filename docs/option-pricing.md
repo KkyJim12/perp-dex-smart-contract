@@ -1,9 +1,9 @@
-# Shared options formulas for backend and frontend
+# Shared option formulas for backend and frontend
 
-The source of truth is the current `src/OptionsAMM.sol`, particularly
+The source of truth is the current `src/OptionAMM.sol`, particularly
 `optionValue`, `quoteBuy`, `quoteSell`, and `_payoff`. The dependency-free
-[JavaScript module](../sdk/options-math.mjs) reproduces its integer math and
-has [TypeScript declarations](../sdk/options-math.d.mts). It works in Node and
+[JavaScript module](../sdk/option-math.mjs) reproduces its integer math and
+has [TypeScript declarations](../sdk/option-math.d.mts). It works in Node and
 browser bundles. Both applications should import this same module.
 
 This document describes the implemented eight-step model. It does not replace
@@ -177,7 +177,7 @@ displays. Profit can be negative, so use signed bigint values for P/L.
 import {
   quoteBuy, quoteSell, settlementPayout, breakEvenPrice,
   normalizePythPrice, parseUnits, formatUnits,
-} from './sdk/options-math.mjs';
+} from './sdk/option-math.mjs';
 
 // Prefer one block snapshot for getMarket, tradingPaused, and timestamp.
 const market = {
@@ -221,7 +221,7 @@ the signed price to be at most five seconds old and not from the future.
 This is an eight-step, zero-interest, discrete tree with `u = 1 + sigma*sqrt(dt)`.
 It is not the usual exponential up factor of a full CRR implementation and is
 not a Black-Scholes price. Low node counts and finite support can create zero
-quotes or visible kinks, especially for short rounds and options far from strike.
+quotes or visible kinks, especially for short rounds and option far from strike.
 
 Call value increases with spot and put value decreases with spot at a fixed
 time/model. Do not assume more time or volatility always increases a capped
@@ -238,11 +238,11 @@ produce different executable quotes.
 ## Verification
 
 ```bash
-node --test sdk/options-math.test.mjs
-node sdk/options-example.mjs
+node --test sdk/option-math.test.mjs
+node sdk/option-example.mjs
 # Generate artifacts first when running from a fresh clone:
 forge build
-node sdk/options-math.parity.mjs
+node sdk/option-math.parity.mjs
 ```
 
 The parity test launches and terminates its own local Anvil instance. It compares
@@ -251,4 +251,4 @@ across calls/puts, all five supported durations, volatility/fee bounds, near-exp
 times, tiny rounding differences, automatic opening strike, and maximum price.
 Amounts match exactly. Set FOUNDRY_BIN if forge/cast/anvil are installed outside
 the default ~/.foundry/bin directory. This checks agreement with the implemented
-model; it does not establish that its prices match an external options market.
+model; it does not establish that its prices match an external option market.

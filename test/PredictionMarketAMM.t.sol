@@ -10,7 +10,6 @@ import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
 contract PredictionOracleMock {
     bytes32 constant FEED = bytes32(uint256(1));
     PythStructs.Price public spot;
-    PythStructs.Price public boundary;
     bytes32 public returnedFeed = FEED;
     uint256 public updateFee;
 
@@ -26,10 +25,6 @@ contract PredictionOracleMock {
         spot = PythStructs.Price(price, conf, expo, time);
     }
 
-    function setBoundary(int64 price, uint64 conf, int32 expo, uint256 time) external {
-        boundary = PythStructs.Price(price, conf, expo, time);
-    }
-
     function getUpdateFee(bytes[] calldata) external view returns (uint256) {
         return updateFee;
     }
@@ -40,19 +35,9 @@ contract PredictionOracleMock {
     }
 
     function getPriceNoOlderThan(bytes32 id, uint256) external view returns (PythStructs.Price memory) {
-        require(id == FEED, "Wrong spot feed");
+        require(id == returnedFeed, "Wrong spot feed");
         // Deliberately leave freshness validation to the vault in these tests.
         return spot;
-    }
-
-    function parsePriceFeedUpdatesUnique(bytes[] calldata, bytes32[] calldata ids, uint64, uint64)
-        external
-        payable
-        returns (PythStructs.PriceFeed[] memory feeds)
-    {
-        require(msg.value == updateFee && ids.length == 1 && ids[0] == FEED, "Oracle inputs");
-        feeds = new PythStructs.PriceFeed[](1);
-        feeds[0] = PythStructs.PriceFeed(returnedFeed, boundary, boundary);
     }
 }
 
@@ -112,9 +97,8 @@ contract PredictionMarketAMMTest is Test {
         _fund(bob, 20_000e6);
         vm.prank(lp);
         amm.deposit(100_000e6, 100_000e6);
-        amm.createMarket(0, 300, 300, 10_000);
+        amm.createMarket(0, 300, 10_000);
         vm.warp(300);
-        pyth.setBoundary(100, 0, 0, 300);
         pyth.setSpot(100, 0, 0, 300);
         amm.openMarket(0, new bytes[](0));
     }
@@ -132,7 +116,7 @@ contract PredictionMarketAMMTest is Test {
 
     function _resolve(uint256 id, int64 price, uint256 time) internal {
         vm.warp(time);
-        pyth.setBoundary(price, 0, 0, time);
+        pyth.setSpot(price, 0, 0, time);
         amm.resolveMarket(id, new bytes[](0));
     }
 
@@ -155,9 +139,9 @@ contract PredictionMarketAMMTest is Test {
         (uint256 laterUp,) = amm.quoteBuy(0, true, 100e6, 100.1e18);
         assertLt(laterUp, up);
 
-        uint256 high = amm.createMarket(0, 900, 900, 20_000);
+        uint256 high = amm.createMarket(0, 900, 20_000);
         vm.warp(900);
-        pyth.setBoundary(100, 0, 0, 900);
+        pyth.setSpot(100, 0, 0, 900);
         amm.openMarket(high, new bytes[](0));
         vm.warp(1500); // same 300 seconds remaining as the original quote
         (uint256 highVolUp,) = amm.quoteBuy(high, true, 100e6, 100.1e18);
@@ -235,7 +219,7 @@ contract PredictionMarketAMMTest is Test {
     }
 
     function testLPsLockedAcrossMultipleExposedMarkets() public {
-        uint256 second = amm.createMarket(0, 900, 900, 10_000);
+        uint256 second = amm.createMarket(0, 900, 10_000);
         _buy(alice, 0, true, 100e6);
         vm.prank(lp);
         vm.expectRevert("Unresolved markets lock LPs");
@@ -244,12 +228,10 @@ contract PredictionMarketAMMTest is Test {
         vm.expectRevert("Unresolved markets lock LPs");
         amm.deposit(1e6, 0);
         vm.warp(900);
-        pyth.setBoundary(100, 0, 0, 900);
         pyth.setSpot(100, 0, 0, 900);
         amm.openMarket(second, new bytes[](0));
         uint256 secondPayout = _buy(bob, second, false, 200e6);
         assertEq(amm.unresolvedExposureMarkets(), 2);
-        pyth.setBoundary(100, 0, 0, 600);
         amm.resolveMarket(0, new bytes[](0));
         assertEq(amm.reservedPayout(), secondPayout);
         assertEq(amm.unresolvedExposureMarkets(), 1);
@@ -288,7 +270,7 @@ contract PredictionMarketAMMTest is Test {
         assertLt(payout, 194e6);
         assertEq(address(pyth).balance, 1);
         vm.warp(600);
-        pyth.setBoundary(100, 0, 0, 600);
+        pyth.setSpot(100, 0, 0, 600);
         vm.expectRevert("Incorrect Pyth fee");
         amm.resolveMarket(0, new bytes[](0));
         vm.deal(address(this), 1);
@@ -318,23 +300,107 @@ contract PredictionMarketAMMTest is Test {
         _buy(alice, 0, true, 100e6);
     }
 
-    function testBoundaryFeedTimeAndConfidenceValidated() public {
+    function testSettlementFeedTimeAndConfidenceValidated() public {
         vm.expectRevert("Not resolvable");
         amm.resolveMarket(0, new bytes[](0));
         vm.warp(650);
-        pyth.setBoundary(100, 0, 0, 599);
+        pyth.setSpot(100, 0, 0, 599);
         vm.expectRevert("Invalid publish time");
         amm.resolveMarket(0, new bytes[](0));
-        pyth.setBoundary(100, 0, 0, 631);
+        pyth.setSpot(100, 0, 0, 631);
         vm.expectRevert("Invalid publish time");
         amm.resolveMarket(0, new bytes[](0));
-        pyth.setBoundary(100, 2, 0, 600);
+        pyth.setSpot(100, 0, 0, 651);
+        vm.expectRevert("Invalid publish time");
+        amm.resolveMarket(0, new bytes[](0));
+        pyth.setSpot(100, 2, 0, 650);
         vm.expectRevert("Uncertain price");
         amm.resolveMarket(0, new bytes[](0));
-        pyth.setBoundary(100, 0, 0, 600);
+        pyth.setSpot(100, 0, 0, 650);
         pyth.setReturnedFeed(bytes32(uint256(2)));
-        vm.expectRevert("Wrong feed");
+        vm.expectRevert("Wrong spot feed");
         amm.resolveMarket(0, new bytes[](0));
+    }
+
+    function testWorkerCreatesAndOpensRoundAtAnyTime() public {
+        amm.authorizeBackend(bob, true);
+        vm.warp(312);
+        vm.prank(bob);
+        uint256 id = amm.createMarket(0, 300, 10_000);
+        assertEq(amm.getMarket(id).startTime, 0);
+        assertEq(amm.getMarket(id).endTime, 0);
+        assertEq(amm.getMarket(id).duration, 300);
+        // Creating another round at the same time is allowed.
+        amm.createMarket(0, 300, 10_000);
+        vm.warp(90_123);
+        pyth.setSpot(100, 0, 0, 90_117);
+        vm.expectRevert("Invalid publish time");
+        amm.openMarket(id, new bytes[](0));
+        assertEq(amm.getMarket(id).startTime, 0);
+        pyth.setSpot(100, 0, 0, 90_124);
+        vm.expectRevert("Invalid publish time");
+        amm.openMarket(id, new bytes[](0));
+        pyth.setSpot(100, 0, 0, 90_118);
+        vm.prank(bob);
+        amm.openMarket(id, new bytes[](0));
+        assertEq(amm.getMarket(id).startTime, 90_123);
+        assertEq(amm.getMarket(id).endTime, 90_423);
+        vm.expectRevert("Not scheduled");
+        amm.openMarket(id, new bytes[](0));
+        vm.expectRevert("Not resolvable");
+        amm.resolveMarket(id, new bytes[](0));
+        vm.warp(90_423);
+        pyth.setSpot(100, 0, 0, 90_422);
+        vm.expectRevert("Invalid publish time");
+        amm.resolveMarket(id, new bytes[](0));
+        _resolve(id, 101, 90_999);
+        assertEq(amm.getMarket(id).closingPrice, 101e18);
+    }
+
+    function testWorkerAuthorizationAndRevocation() public {
+        vm.prank(alice);
+        vm.expectRevert("Not authorized backend");
+        amm.createMarket(0, 300, 10_000);
+        uint256 id = amm.createMarket(0, 300, 10_000);
+        vm.prank(alice);
+        vm.expectRevert("Not authorized backend");
+        amm.openMarket(id, new bytes[](0));
+        vm.prank(alice);
+        vm.expectRevert();
+        amm.authorizeBackend(alice, true);
+        vm.expectRevert("Invalid backend");
+        amm.authorizeBackend(address(0), true);
+        amm.authorizeBackend(bob, true);
+        vm.prank(bob);
+        amm.openMarket(id, new bytes[](0));
+        amm.authorizeBackend(bob, false);
+        vm.warp(600);
+        pyth.setSpot(100, 0, 0, 600);
+        vm.prank(bob);
+        vm.expectRevert("Not authorized backend");
+        amm.resolveMarket(id, new bytes[](0));
+        amm.resolveMarket(id, new bytes[](0));
+    }
+
+    function testLifecycleConsumesSignedUpdatesAndChargesExactFee() public {
+        uint256 id = amm.createMarket(0, 300, 10_000);
+        pyth.setFee(1);
+        vm.deal(address(this), 2);
+        bytes[] memory data = new bytes[](1);
+        vm.warp(333);
+        data[0] = abi.encode(PythStructs.Price(102, 0, 0, 331));
+        vm.expectRevert("Incorrect Pyth fee");
+        amm.openMarket(id, data);
+        assertEq(amm.getMarket(id).startTime, 0);
+        amm.openMarket{value: 1}(id, data);
+        assertEq(amm.getMarket(id).openingPrice, 102e18);
+        assertEq(amm.getMarket(id).endTime, 633);
+        vm.warp(999);
+        data[0] = abi.encode(PythStructs.Price(101, 0, 0, 997));
+        amm.resolveMarket{value: 1}(id, data);
+        assertEq(amm.getMarket(id).closingPrice, 101e18);
+        assertFalse(amm.getMarket(id).upWins);
+        assertEq(address(pyth).balance, 2);
     }
 
     function testPauseAndCutoffStopBetsButAllowResolution() public {
@@ -381,7 +447,7 @@ contract PredictionMarketAMMTest is Test {
         _buy(bob, 0, true, 100e6);
         usdc.setBlocked(bob);
         vm.warp(600);
-        pyth.setBoundary(100, 0, 0, 600);
+        pyth.setSpot(100, 0, 0, 600);
         uint256 aliceBefore = usdc.balanceOf(alice);
         vm.expectRevert("Recipient blocked");
         amm.resolveMarket(0, new bytes[](0));
@@ -417,7 +483,7 @@ contract PredictionMarketAMMTest is Test {
         _buy(address(1000), 0, false, 10e6); // existing holder can add at the cap
         assertEq(amm.traderCount(0), count);
         vm.warp(600);
-        pyth.setBoundary(100, 0, 0, 600);
+        pyth.setSpot(100, 0, 0, 600);
         uint256 startGas = gasleft();
         amm.resolveMarket(0, new bytes[](0));
         uint256 used = startGas - gasleft();
@@ -435,9 +501,8 @@ contract PredictionMarketAMMTest is Test {
     function testResolveEmptyMarketAndNoWinningHolders() public {
         _resolve(0, 100, 600);
         assertEq(amm.unresolvedExposureMarkets(), 0);
-        uint256 id = amm.createMarket(0, 300, 900, 10_000);
+        uint256 id = amm.createMarket(0, 300, 10_000);
         vm.warp(900);
-        pyth.setBoundary(100, 0, 0, 900);
         pyth.setSpot(100, 0, 0, 900);
         amm.openMarket(id, new bytes[](0));
         _buy(alice, id, false, 100e6);
@@ -448,9 +513,9 @@ contract PredictionMarketAMMTest is Test {
 
     function testInvalidVolatilityRejected() public {
         vm.expectRevert("Invalid volatility");
-        amm.createMarket(0, 300, 600, 99);
+        amm.createMarket(0, 300, 99);
         vm.expectRevert("Invalid volatility");
-        amm.createMarket(0, 300, 600, 50_001);
+        amm.createMarket(0, 300, 50_001);
     }
 
     function testFuzzPayoutConservationAndExpectedEdge(uint96 rawAssets, bool up, bool upWins) public {
@@ -495,9 +560,8 @@ contract PredictionMarketSettlementGasTest is Test {
         usdc.ownerMint(address(this), 10_000e6);
         usdc.approve(address(amm), type(uint256).max);
         amm.deposit(10_000e6, 0);
-        amm.createMarket(0, 300, 300, 10_000);
+        amm.createMarket(0, 300, 10_000);
         vm.warp(300);
-        pyth.setBoundary(100, 0, 0, 300);
         pyth.setSpot(100, 0, 0, 300);
         amm.openMarket(0, new bytes[](0));
         for (uint256 i; i < 128; ++i) {
@@ -509,7 +573,7 @@ contract PredictionMarketSettlementGasTest is Test {
             vm.stopPrank();
         }
         vm.warp(600);
-        pyth.setBoundary(100, 0, 0, 600);
+        pyth.setSpot(100, 0, 0, 600);
     }
 
     function testResolveColdMaximumWinningRecipients() public {

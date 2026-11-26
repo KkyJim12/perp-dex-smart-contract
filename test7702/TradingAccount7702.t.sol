@@ -412,10 +412,11 @@ contract TradingAccount7702MarketsTest is Test {
         option.deposit(100_000e6, option.previewDeposit(100_000e6));
         usdc.approve(address(prediction), 100_000e6);
         prediction.deposit(100_000e6, 100_000e6);
-        vm.warp(299);
-        option.createMarket(0, 300, 300, 100e18, 10_000, 300, true);
-        prediction.createMarket(0, 300, 300, 10_000);
-        vm.warp(300);
+        vm.warp(1 days - 1);
+        option.createMarket(0, 1 days, 1 days, 100e18, 10_000, 300, true);
+        prediction.createMarket(0, 300, 10_000);
+        vm.warp(1 days);
+        oracle.setPrice(100);
         option.openMarket{value: FEE}(0, new bytes[](0));
         prediction.openMarket{value: FEE}(0, new bytes[](0));
         usdc.ownerMint(owner, 5_000e6);
@@ -516,7 +517,7 @@ contract TradingAccount7702MarketsTest is Test {
     function testSettlementPaysOriginalEOAAndPerpCanCloseThroughDelegation() public {
         (uint256 premium,) = option.quoteBuy(0, 1_000e6, 100e18);
         _sponsoredTrade(_tradeCalls());
-        vm.warp(600);
+        vm.warp(2 days);
         oracle.setPrice(150);
         prediction.resolveMarket{value: FEE}(0, new bytes[](0));
         option.finalizeMarket{value: FEE}(0, new bytes[](0));

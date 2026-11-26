@@ -23,17 +23,6 @@ contract PredictionPairsMockPyth {
         require(id == expectedId, "Unexpected feed");
         return PythStructs.Price(100, 0, 0, block.timestamp);
     }
-
-    function parsePriceFeedUpdatesUnique(bytes[] calldata, bytes32[] calldata ids, uint64 minTime, uint64)
-        external
-        payable
-        returns (PythStructs.PriceFeed[] memory feeds)
-    {
-        require(ids.length == 1 && ids[0] == expectedId, "Unexpected feed");
-        feeds = new PythStructs.PriceFeed[](1);
-        PythStructs.Price memory price = PythStructs.Price(100, 0, 0, minTime);
-        feeds[0] = PythStructs.PriceFeed(ids[0], price, price);
-    }
 }
 
 contract PredictionMarketPairsTest is Test {
@@ -61,7 +50,7 @@ contract PredictionMarketPairsTest is Test {
         (, feed, active) = amm.pairs(2);
         assertEq(feed, bytes32(uint256(3)));
         assertTrue(active);
-        uint256 market = amm.createMarket(5, 300, 300, 10_000);
+        uint256 market = amm.createMarket(5, 300, 10_000);
         assertEq(amm.getMarket(market).pairId, 5);
     }
 
@@ -88,17 +77,17 @@ contract PredictionMarketPairsTest is Test {
         vm.expectRevert("Invalid pair");
         amm.removePair(1);
         vm.expectRevert("Invalid pair");
-        amm.createMarket(1, 300, 300, 10_000);
+        amm.createMarket(1, 300, 10_000);
         amm.removePair(0);
         vm.expectRevert("Pair inactive");
         amm.removePair(0);
         vm.expectRevert("Pair inactive");
-        amm.createMarket(0, 300, 300, 10_000);
+        amm.createMarket(0, 300, 10_000);
     }
 
     function testRemovedPairCanOpenTradeResolveAndPayWithOriginalFeed() public {
         amm.addPair("BTC_USD", BTC);
-        uint256 id = amm.createMarket(0, 300, 300, 10_000);
+        uint256 id = amm.createMarket(0, 300, 10_000);
         amm.removePair(0);
         amm.addPair("BTC_USD", bytes32(uint256(2)));
         pyth.setExpectedId(BTC);

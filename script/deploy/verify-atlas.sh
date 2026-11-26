@@ -115,23 +115,32 @@ for ADDRESS_VAR in "${ADDRESS_VARS[@]}"; do
         exit 1
     fi
 done
+read_contract() {
+    local name=$1 getter=$2 actual
+    if ! actual="$(cast call "${!name}" "$getter" --rpc-url "$RPC_URL" 2>/dev/null)"; then
+        echo "Error: could not read $getter from $name (${!name})." >&2
+        echo "Check that $name is the correct contract on chain $CHAIN_ID; vault and LP token addresses are different." >&2
+        return 1
+    fi
+    printf '%s\n' "$actual"
+}
 assert_link() {
-    local vault=$1 getter=$2 expected=$3 actual
-    actual="$(cast call "$vault" "$getter" --rpc-url "$RPC_URL")"
+    local name=$1 getter=$2 expected=$3 actual
+    actual="$(read_contract "$name" "$getter")"
     if [[ "${actual,,}" != "${expected,,}" ]]; then
-        echo "Error: $getter on $vault does not match the address configured in $ENV_FILE." >&2
+        echo "Error: $getter on $name (${!name}) does not match the address configured in $ENV_FILE." >&2
         exit 1
     fi
 }
-for VAULT in "$PERPDEX_ATLAS_ADDRESS" "$OPTION_AMM_ATLAS_ADDRESS" "$PREDICTION_MARKET_AMM_ATLAS_ADDRESS"; do
+for VAULT in PERPDEX_ATLAS_ADDRESS OPTION_AMM_ATLAS_ADDRESS PREDICTION_MARKET_AMM_ATLAS_ADDRESS; do
     assert_link "$VAULT" 'usdc()(address)' "$USDC_ADDRESS"
 done
-assert_link "$PERPDEX_ATLAS_ADDRESS" 'ppUSDC()(address)' "$ATLAS_PPUSDC_ADDRESS"
-assert_link "$OPTION_AMM_ATLAS_ADDRESS" 'opUSDC()(address)' "$ATLAS_OPUSDC_ADDRESS"
-assert_link "$PREDICTION_MARKET_AMM_ATLAS_ADDRESS" 'shareToken()(address)' "$ATLAS_PMUSDC_ADDRESS"
+assert_link PERPDEX_ATLAS_ADDRESS 'ppUSDC()(address)' "$ATLAS_PPUSDC_ADDRESS"
+assert_link OPTION_AMM_ATLAS_ADDRESS 'opUSDC()(address)' "$ATLAS_OPUSDC_ADDRESS"
+assert_link PREDICTION_MARKET_AMM_ATLAS_ADDRESS 'shareToken()(address)' "$ATLAS_PMUSDC_ADDRESS"
 
-PERP_MAX_AGE="$(cast call "$PERPDEX_ATLAS_ADDRESS" 'maxPriceAge()(uint256)' --rpc-url "$RPC_URL")"
-PREDICTION_FEE="$(cast call "$PREDICTION_MARKET_AMM_ATLAS_ADDRESS" 'feeBps()(uint256)' --rpc-url "$RPC_URL")"
+PERP_MAX_AGE="$(read_contract PERPDEX_ATLAS_ADDRESS 'maxPriceAge()(uint256)')"
+PREDICTION_FEE="$(read_contract PREDICTION_MARKET_AMM_ATLAS_ADDRESS 'feeBps()(uint256)')"
 # Cast can annotate large uints with a scientific-notation suffix.
 PERP_MAX_AGE="${PERP_MAX_AGE%% *}"
 PREDICTION_FEE="${PREDICTION_FEE%% *}"
@@ -148,6 +157,7 @@ redact_output() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ -n "$VERIFIER_API_KEY" ]]; then line=${line//"$VERIFIER_API_KEY"/[redacted]}; fi
         if [[ -n "$VERIFIER_API_KEY_ENCODED" ]]; then line=${line//"$VERIFIER_API_KEY_ENCODED"/[redacted]}; fi
+        if [[ -n "$RPC_URL" ]]; then line=${line//"$RPC_URL"/[RPC URL redacted]}; fi
         printf '%s\n' "$line"
     done
 }
@@ -160,7 +170,7 @@ verify_contract() {
         --compiler-version 0.8.20 --num-of-optimizations 1 --via-ir
         --verifier "$VERIFIER" --verifier-url "$VERIFIER_URL")
     if [[ "$VERIFIER" != sourcify || "$CHAIN_ID" == 4663 || "$CHAIN_ID" == 46630 ]]; then
-        args+=(--watch)
+        args+=(--watch --retries 30 --delay 10)
     fi
     if [[ "$VERIFIER" != sourcify ]]; then args+=(--etherscan-api-key "$VERIFIER_API_KEY"); fi
     if [[ "$VERIFIER" == blockscout ]]; then args+=(--skip-is-verified-check); fi

@@ -22,6 +22,19 @@ bash script/deploy/deploy-atlas.sh --broadcast
 bash script/deploy/deploy-atlas.sh --broadcast --resume
 ```
 
+To deploy only the Atlas prediction vault and its fresh `pmUSDC` token:
+
+```bash
+bash script/deploy/deploy-prediction-atlas.sh .env --dry-run
+bash script/deploy/deploy-prediction-atlas.sh .env --broadcast
+```
+
+This runner uses `PRIVATE_KEY`, `RPC_URL`, `CHAIN_ID`, `USDC_ADDRESS`,
+`ATLAS_SIGNER`, and `PREDICTION_FEE_BPS` (default 300). Save the confirmed vault
+as `PREDICTION_MARKET_AMM_ATLAS_ADDRESS` and its `shareToken()` as
+`ATLAS_PMUSDC_ADDRESS`. It supports `--broadcast --resume` and
+`--broadcast --start-fresh`, and defaults to simulation.
+
 The runner also finds Foundry in `$HOME/.foundry/bin` or the Windows user
 profile when it is missing from `PATH`; custom installations can set
 `FOUNDRY_DIR` to the directory containing Foundry's `bin` folder.
@@ -54,13 +67,13 @@ set, and Etherscan API V2 with `ETHERSCAN_API_KEY` for other chains. Verificatio
 does not require a private key.
 
 `ATLAS_MAX_PRICE_AGE` defaults to 5 seconds for perpetuals and must be 1-5;
-`PREDICTION_FEE_BPS` defaults to 300 (3%). Authorize the option backend and
-deposit liquidity separately. Options and
-predictions require archived signed quotes stamped exactly at their scheduled
-start and expiry seconds; confirm Atlas can supply these before funding rounds.
-Prediction opening and resolution must submit those quotes within five seconds
-of the boundary. Missing the resolution window leaves the round unresolved and
-its funds locked; there is no late-settlement fallback.
+`PREDICTION_FEE_BPS` defaults to 300 (3%). Authorize the option and prediction
+backends with `authorizeBackend(worker, true)` and deposit liquidity separately.
+Options require archived signed quotes stamped exactly at their scheduled start
+and expiry seconds. Prediction workers create rounds at any time and open them
+with fresh signed quotes; their duration starts when the opening transaction
+executes. Resolve after expiry using a fresh quote at execution time, including
+when the worker is delayed. Prediction quotes must be at most five seconds old.
 
 Seed the Atlas pair registries after deployment. Set `PRIVATE_KEY`, `RPC_URL`,
 `CHAIN_ID`, and the three Atlas vault addresses in `.env`. Feed defaults use the
@@ -96,8 +109,8 @@ pull payloads. It has a dedicated deployment script and LP token. See
 [Atlas deployment, feed configuration, and transaction integration](docs/perpdex-atlas.md).
 
 `OptionAMMAtlas` and `PredictionMarketAMMAtlas` copy the existing option and
-prediction vaults with Atlas pull quotes and independent LP tokens. Opening and
-settlement require quotes stamped exactly at each scheduled boundary. See
+prediction vaults with Atlas pull quotes and independent LP tokens. Options use
+exact boundary quotes; predictions use fresh quotes when the worker executes. See
 [Atlas option/prediction deployment and integration](docs/atlas-markets.md).
 
 ## Deploy and verify all markets
@@ -135,8 +148,9 @@ Set `DEPLOY_MOCK_USDC=false` and `USDC_ADDRESS` to use existing six-decimal USDC
 
 Prediction deploys with an empty pair registry. Seed BTC, ETH, and SOL using
 the prediction seed target below. `PREDICTION_FEE_BPS` defaults to 300 (3%) and accepts 0–500;
-the fee is fixed at deployment. The configured Pyth oracle must support
-`parsePriceFeedUpdatesUnique`. Create option markets and prediction rounds
+the fee is fixed at deployment. Options require Pyth's
+`parsePriceFeedUpdatesUnique`; predictions use `updatePriceFeeds` and
+`getPriceNoOlderThan`. Create option markets and prediction rounds
 separately after deployment.
 
 Verification requires `OPUSDC_ADDRESS`, `OPTION_AMM_ADDRESS`, `PMUSDC_ADDRESS`,
@@ -274,7 +288,7 @@ and active names and feeds must be unique. Removal disables new rounds. Existing
 rounds can still open, trade, resolve, and automatically pay winners using their original feed.
 Re-adding a removed pair allocates a new ID.
 
-Integrations must use `createMarket(uint256 pairId,uint64 duration,uint64 startTime,uint256 volatilityBps)`
+Integrations must use `createMarket(uint256 pairId,uint64 duration,uint256 volatilityBps)`
 and `Market.pairId` instead of the former asset enum. The constructor is now
 `constructor(address usdc,address pyth,uint256 feeBps)`. This non-upgradeable
 contract requires a new deployment to use the changed interface.
@@ -291,9 +305,10 @@ closing price is greater than or equal to the opening price; Down wins otherwise
 Each purchase uses the current price to calculate odds, and its payout remains
 fixed even if prices or later quotes change.
 
-The owner sets annualized volatility when scheduling a round, between 100 and
-50,000 basis points (1%-500%; `10_000` means 100%). It cannot change during the
-round. The pricing model uses the following symmetric rational sigmoid:
+The owner or an authorized backend sets annualized volatility when creating a
+round, between 100 and 50,000 basis points (1%-500%; `10_000` means 100%). It
+cannot change during the round. The pricing model uses the following symmetric
+rational sigmoid:
 
 ```text
 S = current price; K = round opening price
@@ -338,13 +353,26 @@ returns `(winningPayout, fee)`; `winProbability(id, up, price)` returns the mode
 probability scaled by `1e18`. Quote prices are caller-supplied estimates; buys
 verify them against Pyth. Pyth's current-price integration uses
 [`updatePriceFeeds`](https://api-reference.pyth.network/price-feeds/evm/updatePriceFeeds)
-followed by `getPriceNoOlderThan`; round boundaries still require the first
-update at/after the boundary through `parsePriceFeedUpdatesUnique`.
+followed by `getPriceNoOlderThan` for opening, purchases, and settlement.
 
-Anyone can call `resolveMarket(id, boundaryUpdateData)` after expiry. A backend
-keeper must submit this transaction for timely settlement; the contract does
-not initiate transactions itself. Resolution verifies the boundary price and
-transfers USDC directly to every winner in that same transaction, clears both
+The owner authorizes a worker with `authorizeBackend(worker, true)` (and can
+revoke it with `false`). Only the owner or an authorized backend can create,
+open, or resolve rounds. Call `createMarket(pairId, duration, volatilityBps)` at
+any time; supported durations remain 5 minutes, 15 minutes, 1 hour, and 1 day.
+Created rounds have zero `startTime` and `endTime` until opened. Call
+`openMarket(id, priceUpdateData)` whenever ready with a fresh signed price and
+the exact Pyth update fee. Opening sets `startTime = block.timestamp` and
+`endTime = startTime + duration`. There is no UTC alignment or opening deadline.
+`MarketCreated` reports the duration; `MarketOpened` reports actual start/end times.
+
+The worker calls `resolveMarket(id, priceUpdateData)` after expiry using a fresh
+signed update with a publish time at/after `endTime`, plus the exact update fee.
+Settlement has no upper time limit. The closing price is the price verified at
+execution time, so a delayed worker can change the outcome relative to a price
+observed at expiry. The backend controls settlement timing and must be trusted
+to execute the intended policy. No historical price archive is required.
+The contract does not initiate transactions itself. Resolution verifies the
+price and transfers USDC directly to every winner in that same transaction, clears both
 winning and losing balances, and releases the market's collateral reservation.
 No user action is required to receive winnings. Resolution also works when new
 trading is paused and cannot pay a market twice.
@@ -389,7 +417,7 @@ Set `INITIALIZE_CONFIRM=yes` for non-interactive use.
 
 ## Option AMM vault
 
-`OptionAMM` has scheduled call/put rounds, like the prediction vault. The owner
+`OptionAMM` has scheduled call/put rounds. The owner
 authorizes a backend to create, open, and finalize markets. Users buy longs for
 a dynamically priced USDC premium and can sell all or part back before expiry.
 Backend finalization authenticates one fixed Pyth expiry price and automatically

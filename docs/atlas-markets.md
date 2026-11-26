@@ -41,50 +41,57 @@ The private stock feeds use the user's configured sources.
 
 Reference: [Atlas pull integration](https://docs.atlasoracle.io/developers/atlas-oracle/integrate-the-pull-mode).
 
-## Settlement rule: exact boundary timestamps
+## Prediction: worker-driven rounds
 
-The Pyth versions prove that a historical update is the first at/after the
-scheduled start or expiry. Atlas's pull SDK authenticates a price and timestamp;
-it provides no equivalent first-update proof. These new contracts therefore
-require a signed quote with `timestamp == startTime` when opening and
-`timestamp == endTime` when settling. A quote at `endTime + 1` is rejected even
-if submitted within 30 seconds of expiry.
+The owner authorizes the worker with `authorizeBackend(worker, true)`. The owner
+or an authorized worker can create, open, and resolve rounds. Create with
+`createMarket(pairId, duration, volatilityBps)` at any time, without a scheduled
+start or UTC alignment. Durations remain 5 minutes, 15 minutes, 1 hour, or 1 day.
+The round has zero start/end times until `openMarket(id)` executes. Opening sets
+`startTime = block.timestamp` and `endTime = startTime + duration`, and stores the
+fresh signed quote as its opening price. `MarketCreated` includes the duration;
+`MarketOpened` includes the actual start/end times.
 
-Prediction opening and resolution require boundary quotes no more than **five
-seconds old**: submit `openMarket` between `startTime` and `startTime + 5`, and
-`resolveMarket` between `endTime` and `endTime + 5`, inclusive. Quotes must still
-be stamped exactly at the scheduled boundary. A missed resolution window leaves
-the round unresolved, payouts unpaid, and exposed LP funds locked; there is no
-late-settlement fallback. These boundary quotes remain independent of the spot
-timestamp high-water mark.
+Opening has no deadline. After expiry, `resolveMarket(id)` uses a fresh signed
+quote published at/after `endTime`. Both calls accept quotes at most **five
+seconds old**, with no requirement to match an exact scheduled second. A worker
+can retry a delayed settlement with a fresh payload; no historical payload
+archive or timestamp-indexed boundary price writes are needed. Prediction uses
+the same monotonic feed timestamp and same-timestamp price consistency checks
+for opening, purchases, and resolution.
 
-Options retain their 30-second opening window and historical expiry settlement.
-Their boundary quotes are exempt from the five-second spot freshness limit.
+Settlement uses the price at execution time. A delayed worker can therefore
+change the winning outcome compared with the price observed at expiry. The
+backend controls opening and settlement timing and must be trusted to execute
+the intended policy. The trading cutoff and expiry still apply to purchases.
 
-**Atlas must supply a canonical quote for each exact scheduled second.** Confirm
-this capability for the chosen feeds before scheduling funded markets. The
-backend must capture and archive the complete signed opening/expiry payloads;
-the documented latest-price endpoint alone does not guarantee historical quote
-retrieval. Without the required expiry quote, settlement and LP release can
-remain blocked. There is no arbitrary-price, nearest-timestamp, or unsigned
-fallback. Option still supports cancellation of unexposed scheduled/trading
-markets under its existing rules.
+## Options: exact boundary timestamps
 
-`boundaryPrices(feedId, timestamp)` commits the first accepted value in each
-vault. Further uses of that boundary must agree and still authenticate a signed
-payload. This prevents changing a committed boundary across markets in that
-vault. It does not prove that Atlas issued only one price for a timestamp, or
-prove which of multiple signed prices was issued first; canonical quote
-uniqueness remains a requirement of the Atlas data service.
+The Pyth option contract proves the historical update is the first at/after the
+scheduled boundary. Atlas authenticates a price and timestamp without that
+proof, so options require signed quotes stamped exactly at `startTime` and
+`endTime`. Options retain their 30-second opening window and historical expiry
+settlement; boundary quotes are exempt from spot freshness checks.
+
+Atlas must supply canonical exact-second quotes for options. Archive their
+complete signed opening/expiry payloads. Without an expiry quote, settlement
+and LP release can remain blocked. Options support cancellation of unexposed
+scheduled/trading markets under their existing rules.
+
+`boundaryPrices(feedId, timestamp)` commits the first accepted option boundary
+value and rejects conflicting uses. The inherited getter also exists on the
+prediction vault, but prediction lifecycle calls do not write it. Canonical
+quote uniqueness remains a requirement of the Atlas data service.
 
 ## Price policy and units
 
-Spot purchases, and option sales, require a signed quote:
+Prediction lifecycle calls, purchases, and option sales require a signed quote:
 
 - For the market's configured Atlas **bytes4** feed ID.
-- Stamped at/after the market start, at/before the block timestamp, and at most
-  **five seconds old**.
-- With a positive price equal to the caller's `currentPrice` argument.
+- Stamped at/before the block timestamp and at most **five seconds old**.
+  Trades require a timestamp at/after the market start; prediction settlement
+  requires a timestamp at/after expiry.
+- With a positive price; trades require it to equal the caller's `currentPrice` argument.
 - With a timestamp no older than the last successfully used spot timestamp for
   that feed in the vault. Reusing that timestamp requires the same spot price.
 
@@ -122,6 +129,26 @@ reference signer `0x59eD4701224fD9e2a85Ef2946c2ab828C1dDC600` when the environme
 variable is absent. Confirm the current Atlas key before deploying. Prediction
 uses `PREDICTION_FEE_BPS`, default 300 (3%), with the existing 0–500 limit.
 
+For prediction alone, the Bash runner loads the environment file, checks the RPC
+chain ID, and deploys `PredictionMarketAMMAtlas` with its constructor-created
+`pmUSDC` token:
+
+```bash
+bash script/deploy/deploy-prediction-atlas.sh .env --dry-run
+bash script/deploy/deploy-prediction-atlas.sh .env --broadcast
+# Recover an interrupted deployment after checking receipts and the deployer nonce.
+bash script/deploy/deploy-prediction-atlas.sh .env --broadcast --resume
+```
+
+It defaults to simulation and accepts `--broadcast --start-fresh` to archive an
+unfinished broadcast and deploy anew. Receipts are saved under
+`broadcast/DeployPredictionMarketAMMAtlas.s.sol/<CHAIN_ID>/run-latest.json`.
+Save the confirmed vault and `shareToken()` as `PREDICTION_MARKET_AMM_ATLAS_ADDRESS`
+and `ATLAS_PMUSDC_ADDRESS`; the runner does not update the environment file.
+`FOUNDRY_PROFILE=default` keeps the repository's deployment compiler settings.
+
+The individual Solidity scripts can also be run directly:
+
 ```bash
 set -a
 source <(tr -d '\r' < .env)
@@ -150,8 +177,9 @@ Use fresh LP instances; existing LP supply represents claims on existing vaults.
 Neither script schedules markets, authorizes a backend, deposits liquidity, or
 migrates existing positions. Register Atlas feed IDs through `addPair(name,
 bytes4FeedId)` and authorize the option backend using
-`authorizeBackend(backend, true)`. Prediction scheduling remains owner-only;
-its opening and settlement remain permissionless. Deposit USDC liquidity before
+`authorizeBackend(backend, true)`. Authorize the prediction worker through the
+same method on the prediction vault. Creation, opening, and settlement require
+the prediction owner or an authorized worker. Deposit USDC liquidity before
 trading. The existing Pyth seed/deployment/verification scripts target the
 original contracts and cannot supply Atlas feed IDs or constructors.
 
@@ -186,6 +214,8 @@ sell(uint256 marketId, uint256 contracts, uint256 currentPrice,
 finalizeMarket(uint256 marketId)
 
 // PredictionMarketAMMAtlas:
+authorizeBackend(address worker, bool authorized) // owner only
+createMarket(uint256 pairId, uint64 duration, uint256 volatilityBps)
 buy(uint256 marketId, bool up, uint256 assets, uint256 currentPrice,
     uint256 minShares, uint256 deadline)
 resolveMarket(uint256 marketId)
@@ -197,8 +227,11 @@ methods are nonpayable. The Atlas TypeScript client's `buildCalldata` can append
 the payload after ABI encoding, as shown in the
 [PerpDexAtlas client example](perpdex-atlas.md#transaction-api). For delegated or
 batched execution, append the payload to the inner vault call. Supply a fresh
-payload for spot trades and the archived exact-timestamp payload for opening or
-settlement. Slippage limits and deadlines still apply.
+payload for trades and prediction opening/settlement. Options require archived
+exact-timestamp payloads for opening/settlement. Slippage limits and deadlines
+still apply. Prediction's create signature, Market tuple, and lifecycle events
+have changed; update generated ABIs and deploy a new vault to use this flow.
+`authorizeBackend` and `createMarket` do not require an oracle payload.
 
 ## Validation
 

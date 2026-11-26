@@ -27,6 +27,10 @@ case "$1" in
     chain-id) printf '%s\n' "${MOCK_CHAIN_ID:-8453}" ;;
     code) printf '%s\n' "${MOCK_CODE:-0x6000}" ;;
     call)
+        if [[ "$2" == "${MOCK_REVERT_ADDRESS:-}" && "$3" == "${MOCK_REVERT_GETTER:-}" ]]; then
+            echo 'Error: server returned an error response: error code 3: execution reverted' >&2
+            exit 1
+        fi
         case "$3" in
             'usdc()(address)') echo "$MOCK_USDC" ;;
             'ppUSDC()(address)') echo "${MOCK_PERP_LINK:-$MOCK_PERP_LP}" ;;
@@ -99,7 +103,7 @@ assert_contains "$MOCK_LOG_DIR/PredictionMarketAMMAtlas.args" "encoded:construct
 assert_contains "$MOCK_LOG_DIR/pmUSDC.args" "encoded:constructor(address):$MOCK_PREDICTION"
 assert_contains "$MOCK_LOG_DIR/ppUSDC.args" '--compiler-version 0.8.20 --num-of-optimizations 1 --via-ir'
 assert_contains "$MOCK_LOG_DIR/ppUSDC.args" '--verifier-url https://api.etherscan.io/v2/api?chainid=8453'
-assert_contains "$MOCK_LOG_DIR/ppUSDC.args" '--watch'
+assert_contains "$MOCK_LOG_DIR/ppUSDC.args" '--watch --retries 30 --delay 10'
 [[ "$(<"$MOCK_LOG_DIR/opUSDC.args")" != *'--constructor-args'* ]]
 
 if MOCK_CHAIN_ID=1 run_script; then exit 1; fi
@@ -108,6 +112,13 @@ if MOCK_CODE=0x run_script; then exit 1; fi
 assert_call_count 0
 if MOCK_PERP_LINK="$MOCK_OPTION_LP" run_script; then exit 1; fi
 assert_call_count 0
+if MOCK_REVERT_ADDRESS="$MOCK_PREDICTION" MOCK_REVERT_GETTER='usdc()(address)' run_script; then exit 1; fi
+assert_call_count 0
+assert_contains "$TEST_DIR/output" 'could not read usdc()(address) from PREDICTION_MARKET_AMM_ATLAS_ADDRESS'
+assert_contains "$TEST_DIR/output" 'vault and LP token addresses are different'
+if MOCK_REVERT_ADDRESS="$MOCK_PERP" MOCK_REVERT_GETTER='maxPriceAge()(uint256)' run_script; then exit 1; fi
+assert_call_count 0
+assert_contains "$TEST_DIR/output" 'could not read maxPriceAge()(uint256) from PERPDEX_ATLAS_ADDRESS'
 if MOCK_FAIL_CONTRACT=src/OptionAMMAtlas.sol:OptionAMMAtlas run_script; then exit 1; fi
 assert_call_count 6
 assert_contains "$TEST_DIR/output" '5 succeeded, 1 failed'
@@ -135,5 +146,7 @@ assert_contains "$MOCK_LOG_DIR/ppUSDC.args" '--skip-is-verified-check'
 [[ "$(<"$TEST_DIR/output")" != *'fake key+/&'* ]]
 [[ "$(<"$TEST_DIR/output")" != *'fake%20key%2B%2F%26'* ]]
 assert_contains "$TEST_DIR/output" '[redacted]'
+[[ "$(<"$TEST_DIR/output")" != *'http://localhost:8545'* ]]
+assert_contains "$TEST_DIR/output" '[RPC URL redacted]'
 
 echo 'Passed Atlas verification checks: all six contracts, constructor arguments, immutable settings, providers, preflight failures, failure summary, CRLF, API key redaction, and no private key.'

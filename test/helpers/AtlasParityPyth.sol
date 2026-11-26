@@ -9,6 +9,12 @@ contract AtlasParityPyth {
         return 0;
     }
 
+    function updatePriceFeeds(bytes[] calldata) external payable {}
+
+    function getPriceNoOlderThan(bytes32, uint256) external view returns (PythStructs.Price memory) {
+        return PythStructs.Price(100, 0, 0, block.timestamp);
+    }
+
     function parsePriceFeedUpdatesUnique(bytes[] calldata, bytes32[] calldata ids, uint64 minTime, uint64)
         external
         payable

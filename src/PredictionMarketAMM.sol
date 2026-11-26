@@ -11,15 +11,11 @@ import {ReentrancyGuard} from "lib/openzeppelin-contracts/contracts/utils/Reentr
 import {PythStructs} from "lib/pyth-sdk-solidity/PythStructs.sol";
 import {pmUSDC} from "./pmUSDC.sol";
 
-/// @dev The pinned Pyth SDK predates this method. The deployed oracle MUST support it.
+/// @dev Pyth spot updates authenticate prices at the time the worker executes each lifecycle call.
 interface IPredictionPyth {
     function getUpdateFee(bytes[] calldata data) external view returns (uint256);
     function updatePriceFeeds(bytes[] calldata data) external payable;
     function getPriceNoOlderThan(bytes32 id, uint256 age) external view returns (PythStructs.Price memory);
-    function parsePriceFeedUpdatesUnique(bytes[] calldata data, bytes32[] calldata ids, uint64 minTime, uint64 maxTime)
-        external
-        payable
-        returns (PythStructs.PriceFeed[] memory);
 }
 
 /// @notice Buy-only binary prediction vault. The vault is every bettor's counterparty.
@@ -32,7 +28,6 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     uint256 public constant BPS = 10_000;
     uint256 public constant MAX_UTILIZATION_BPS = 8_000;
     uint256 public constant MAX_CONFIDENCE_BPS = 100;
-    uint64 public constant ORACLE_WINDOW = 30;
     uint64 public constant TRADING_CUTOFF = 5;
     uint256 public constant WAD = 1e18;
     uint256 public constant YEAR = 365 days;
@@ -58,9 +53,10 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         Status status;
         uint64 startTime;
         uint64 endTime;
+        uint64 duration;
         uint256 openingPrice; // USD, normalized to 18 decimals
         uint256 closingPrice;
-        uint256 volatilityBps; // annualized volatility, fixed when scheduled
+        uint256 volatilityBps; // annualized volatility, fixed when created
         uint256 upOutstanding;
         uint256 downOutstanding;
         bool upWins; // equality is Up
@@ -74,7 +70,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     mapping(bytes32 => bool) private activeNames;
     mapping(bytes32 => bool) private activeFeeds;
     Market[] private markets;
-    mapping(bytes32 => bool) public scheduled;
+    mapping(address => bool) public authorizedBackends;
     mapping(uint256 => mapping(address => uint256)) public upBalance;
     mapping(uint256 => mapping(address => uint256)) public downBalance;
     mapping(uint256 => address[]) public traders;
@@ -84,11 +80,10 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     bool public tradingPaused;
 
     event PairAdded(uint256 indexed pairId, string name, bytes32 priceId);
+    event BackendAuthorized(address indexed backend, bool authorized);
     event PairRemoved(uint256 indexed pairId);
-    event MarketCreated(
-        uint256 indexed marketId, uint256 indexed pairId, uint64 startTime, uint64 endTime, uint256 volatilityBps
-    );
-    event MarketOpened(uint256 indexed marketId, uint256 price);
+    event MarketCreated(uint256 indexed marketId, uint256 indexed pairId, uint64 duration, uint256 volatilityBps);
+    event MarketOpened(uint256 indexed marketId, uint256 price, uint64 startTime, uint64 endTime);
     event MarketResolved(uint256 indexed marketId, uint256 price, bool upWins, uint256 liability);
     event Bought(
         uint256 indexed marketId,
@@ -103,6 +98,11 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
     event Deposited(address indexed lp, uint256 assets, uint256 shares);
     event Withdrawn(address indexed lp, uint256 assets, uint256 shares);
     event TradingPaused(bool paused);
+
+    modifier onlyOperator() {
+        require(msg.sender == owner() || authorizedBackends[msg.sender], "Not authorized backend");
+        _;
+    }
 
     constructor(address usdc_, address pyth_, uint256 feeBps_) Ownable(msg.sender) {
         require(usdc_.code.length > 0 && pyth_.code.length > 0, "Invalid contract");
@@ -164,10 +164,16 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         emit TradingPaused(paused);
     }
 
-    /// @notice Schedule one UTC-aligned round with immutable annualized volatility (100-50,000 bps).
-    function createMarket(uint256 pairId, uint64 duration, uint64 startTime, uint256 volatilityBps)
+    function authorizeBackend(address backend, bool authorized) external onlyOwner {
+        require(backend != address(0), "Invalid backend");
+        authorizedBackends[backend] = authorized;
+        emit BackendAuthorized(backend, authorized);
+    }
+
+    /// @notice Create a round that the backend can open at any time (volatility: 100-50,000 bps).
+    function createMarket(uint256 pairId, uint64 duration, uint256 volatilityBps)
         external
-        onlyOwner
+        onlyOperator
         returns (uint256 id)
     {
         require(pairId < pairs.length, "Invalid pair");
@@ -176,28 +182,21 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
             duration == 5 minutes || duration == 15 minutes || duration == 1 hours || duration == 1 days,
             "Invalid duration"
         );
-        require(startTime > block.timestamp && startTime % duration == 0, "Invalid start");
         require(volatilityBps >= 100 && volatilityBps <= 50_000, "Invalid volatility");
-        bytes32 key = keccak256(abi.encode(pairId, duration, startTime));
-        require(!scheduled[key], "Round exists");
-        scheduled[key] = true;
         id = markets.length;
-        markets.push(
-            Market(pairId, Status.Scheduled, startTime, startTime + duration, 0, 0, volatilityBps, 0, 0, false)
-        );
-        emit MarketCreated(id, pairId, startTime, startTime + duration, volatilityBps);
+        markets.push(Market(pairId, Status.Scheduled, 0, 0, duration, 0, 0, volatilityBps, 0, 0, false));
+        emit MarketCreated(id, pairId, duration, volatilityBps);
     }
 
-    /// @notice Anyone can open a scheduled market with the first Pyth update at/after its start.
-    function openMarket(uint256 id, bytes[] calldata data) external payable nonReentrant {
+    /// @notice Start the round now using a fresh signed Pyth update, without an opening window.
+    function openMarket(uint256 id, bytes[] calldata data) external payable onlyOperator nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Scheduled, "Not scheduled");
-        require(
-            block.timestamp >= m.startTime && block.timestamp <= m.startTime + ORACLE_WINDOW, "Opening window closed"
-        );
-        m.openingPrice = _boundaryPrice(m.pairId, m.startTime, data);
+        m.openingPrice = _spotPrice(m.pairId, 0, data);
+        m.startTime = uint64(block.timestamp);
+        m.endTime = m.startTime + m.duration;
         m.status = Status.Trading;
-        emit MarketOpened(id, m.openingPrice);
+        emit MarketOpened(id, m.openingPrice, m.startTime, m.endTime);
     }
 
     /// @notice Conservative equity while rounds are open; exact net assets after all rounds resolve.
@@ -282,7 +281,7 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         require(shareToken.totalSupply() > 0, "No LP liquidity");
         Market storage m = markets[id];
         _tradable(m);
-        uint256 price = _currentPrice(m, data);
+        uint256 price = _spotPrice(m.pairId, m.startTime, data);
         require(price == currentPrice, "Price mismatch");
         uint256 fee;
         (shares, fee) = quoteBuy(id, up, assets, price);
@@ -309,11 +308,11 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         emit Bought(id, msg.sender, up, assets, shares, fee, price);
     }
 
-    /// @notice Resolve and pay all winners atomically, even while paused. Anyone may call after expiry.
-    function resolveMarket(uint256 id, bytes[] calldata data) external payable nonReentrant {
+    /// @notice Backend resolves after expiry using a fresh execution-time quote, even while paused.
+    function resolveMarket(uint256 id, bytes[] calldata data) external payable onlyOperator nonReentrant {
         Market storage m = markets[id];
         require(m.status == Status.Trading && block.timestamp >= m.endTime, "Not resolvable");
-        uint256 price = _boundaryPrice(m.pairId, m.endTime, data);
+        uint256 price = _spotPrice(m.pairId, m.endTime, data);
         m.closingPrice = price;
         m.upWins = price >= m.openingPrice;
         m.status = Status.Resolved;
@@ -357,30 +356,13 @@ contract PredictionMarketAMM is Ownable2Step, ReentrancyGuard {
         require(usdc.balanceOf(address(this)) - beforeBalance == assets, "Unsupported transfer fee");
     }
 
-    function _boundaryPrice(uint256 pairId, uint64 timestamp, bytes[] calldata data) private returns (uint256) {
-        uint256 fee = pyth.getUpdateFee(data);
-        require(msg.value == fee, "Incorrect Pyth fee");
-        bytes32[] memory ids = new bytes32[](1);
-        ids[0] = pairs[pairId].priceId;
-        PythStructs.PriceFeed[] memory feeds =
-            pyth.parsePriceFeedUpdatesUnique{value: fee}(data, ids, timestamp, timestamp + ORACLE_WINDOW);
-        require(feeds.length == 1 && feeds[0].id == ids[0], "Wrong feed");
-        PythStructs.Price memory p = feeds[0].price;
-        require(
-            p.publishTime >= timestamp && p.publishTime <= timestamp + ORACLE_WINDOW
-                && p.publishTime <= block.timestamp,
-            "Invalid publish time"
-        );
-        return _normalizePrice(p);
-    }
-
-    function _currentPrice(Market storage m, bytes[] calldata data) private returns (uint256) {
+    function _spotPrice(uint256 pairId, uint64 minTime, bytes[] calldata data) private returns (uint256) {
         uint256 fee = pyth.getUpdateFee(data);
         require(msg.value == fee, "Incorrect Pyth fee");
         pyth.updatePriceFeeds{value: fee}(data);
-        PythStructs.Price memory p = pyth.getPriceNoOlderThan(pairs[m.pairId].priceId, MAX_PRICE_AGE);
+        PythStructs.Price memory p = pyth.getPriceNoOlderThan(pairs[pairId].priceId, MAX_PRICE_AGE);
         require(
-            p.publishTime >= m.startTime && p.publishTime <= block.timestamp
+            p.publishTime >= minTime && p.publishTime <= block.timestamp
                 && block.timestamp - p.publishTime <= MAX_PRICE_AGE,
             "Invalid publish time"
         );

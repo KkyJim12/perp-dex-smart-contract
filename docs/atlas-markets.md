@@ -12,6 +12,33 @@ keeps its probability model, immutable fee, buy-only fixed winning payouts,
 Up-on-equality rule, mutually exclusive payout reserve, and atomic settlement.
 Both retain the original trading cutoffs, participant limits, and LP protection.
 
+Initial Atlas mappings use the user's 15 private price feeds from the supplied
+My Feeds screenshot: eight crypto markets and seven stocks. Perpetuals use
+`TICKER_USD` names and prediction uses `TICKER`. Missing or blank
+`ATLAS_*_FEED_ID` overrides use these defaults.
+
+BTC feed #1190 is labeled **BTC/USDT** in Atlas. The application retains its
+`BTC_USD` market name and uses the signed price directly, with no USDT/USD conversion.
+The private stock feeds use the user's configured sources.
+
+| Market | Private Atlas feed | Decimal ID | bytes4 ID |
+| --- | --- | --- | --- |
+| BTC | BTC/USDT | 1190 | `0x000004a6` |
+| ETH | ETH/USD | 1191 | `0x000004a7` |
+| SOL | SOL/USD | 1193 | `0x000004a9` |
+| BNB | BNB/USD | 1194 | `0x000004aa` |
+| HYPE | HYPE/USD | 1195 | `0x000004ab` |
+| DOGE | DOGE/USD | 1196 | `0x000004ac` |
+| XRP | XRP/USD | 1197 | `0x000004ad` |
+| ZEC | ZEC/USD | 1198 | `0x000004ae` |
+| AAPL | AAPL/USD | 1199 | `0x000004af` |
+| MSFT | MSFT/USD | 1200 | `0x000004b0` |
+| AMZN | AMZN/USD | 1202 | `0x000004b2` |
+| GOOGL | GOOGL/USD | 1201 | `0x000004b1` |
+| META | META/USD | 1204 | `0x000004b4` |
+| NVDA | NVDA/USD | 1203 | `0x000004b3` |
+| TSLA | TSLA/USD | 1205 | `0x000004b5` |
+
 Reference: [Atlas pull integration](https://docs.atlasoracle.io/developers/atlas-oracle/integrate-the-pull-mode).
 
 ## Settlement rule: exact boundary timestamps
@@ -23,11 +50,16 @@ require a signed quote with `timestamp == startTime` when opening and
 `timestamp == endTime` when settling. A quote at `endTime + 1` is rejected even
 if submitted within 30 seconds of expiry.
 
-The **30-second opening transaction window** remains: submit `openMarket`
-between `startTime` and `startTime + 30`, attaching the quote stamped exactly
-`startTime`. Settlement can occur any time after expiry, attaching the exact
-expiry quote even if it is now historical. Historical boundary data is exempt
-from the five-second spot freshness limit and the spot timestamp high-water mark.
+Prediction opening and resolution require boundary quotes no more than **five
+seconds old**: submit `openMarket` between `startTime` and `startTime + 5`, and
+`resolveMarket` between `endTime` and `endTime + 5`, inclusive. Quotes must still
+be stamped exactly at the scheduled boundary. A missed resolution window leaves
+the round unresolved, payouts unpaid, and exposed LP funds locked; there is no
+late-settlement fallback. These boundary quotes remain independent of the spot
+timestamp high-water mark.
+
+Options retain their 30-second opening window and historical expiry settlement.
+Their boundary quotes are exempt from the five-second spot freshness limit.
 
 **Atlas must supply a canonical quote for each exact scheduled second.** Confirm
 this capability for the chosen feeds before scheduling funded markets. The
@@ -56,8 +88,8 @@ Spot purchases, and option sales, require a signed quote:
 - With a timestamp no older than the last successfully used spot timestamp for
   that feed in the vault. Reusing that timestamp requires the same spot price.
 
-`ATLAS_MAX_PRICE_AGE` configures PerpDexAtlas only; these forks preserve the
-original fixed `MAX_PRICE_AGE = 5`. Atlas supplies **18-decimal USD prices**, the
+`ATLAS_MAX_PRICE_AGE` configures PerpDexAtlas only (range 1-5); these forks use
+fixed `MAX_PRICE_AGE = 5`. Atlas supplies **18-decimal USD prices**, the
 same units as the original option/prediction APIs. Unlike PerpDexAtlas, these
 two contracts do not scale prices to eight decimals. Cash, notionals, and outcome
 balances retain six-decimal USDC units; LP shares retain their original models.
@@ -122,6 +154,19 @@ bytes4FeedId)` and authorize the option backend using
 its opening and settlement remain permissionless. Deposit USDC liquidity before
 trading. The existing Pyth seed/deployment/verification scripts target the
 original contracts and cannot supply Atlas feed IDs or constructors.
+
+The Atlas-specific seeder registers BTC, ETH, and SOL in options using the
+private defaults `0x000004a6`, `0x000004a7`, and `0x000004a9`. Set
+`ATLAS_BTC_FEED_ID`, `ATLAS_ETH_FEED_ID`, and `ATLAS_SOL_FEED_ID` in `.env` to
+override these defaults; missing or blank values keep them. Simulate with
+`bash script/deploy/seed-atlas-pairs.sh .env option` or the `prediction` target,
+then add `--broadcast`. Prediction and perpetuals both register the requested
+15 markets (eight crypto and seven private stock feeds), in the order listed in
+`script/AtlasInitialPairConfig.sol`. All required feeds must resolve to unique,
+nonzero bytes4 IDs before any pair transactions are prepared. All selected
+vault registries must be empty and owned by `PRIVATE_KEY`. Inspect receipts and
+nonces before resuming partial broadcasts with the same environment/target and
+`--broadcast --resume`.
 
 ## Transaction integration
 

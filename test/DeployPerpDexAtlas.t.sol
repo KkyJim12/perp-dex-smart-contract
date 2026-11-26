@@ -17,7 +17,7 @@ contract PerpDexAtlasDeploymentFixture is DeployPerpDexAtlas {
     }
 
     function _deploymentConfig() internal view override returns (uint256, address, address, uint256) {
-        return (1, fixtureUSDC, fixtureSigner, 45);
+        return (1, fixtureUSDC, fixtureSigner, 5);
     }
 }
 
@@ -44,7 +44,7 @@ contract DeployPerpDexAtlasTest is Test {
         assertEq(address(dex.usdc()), address(usdc));
         assertEq(address(dex.ppUSDC()), lpAddress);
         assertEq(dex.atlasSigner(), signer);
-        assertEq(dex.maxPriceAge(), 45);
+        assertEq(dex.maxPriceAge(), 5);
         assertEq(dex.owner(), vm.addr(1));
         assertEq(dex.totalLiquidityRatio(), 0);
     }

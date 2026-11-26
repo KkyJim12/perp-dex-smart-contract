@@ -9,6 +9,88 @@ and payouts remain attached to the user's existing EOA. See
 
 ## Markets with AtlasOracle
 
+Deploy only the three Atlas vaults and their fresh LP tokens using an existing
+six-decimal `USDC_ADDRESS`. Configure `PRIVATE_KEY`, `RPC_URL`, `CHAIN_ID`, and
+`ATLAS_SIGNER` in `.env`, then run from Git Bash, macOS, or Linux:
+
+```bash
+# Simulate without sending transactions.
+bash script/deploy/deploy-atlas.sh
+# Deploy PerpDexAtlas, OptionAMMAtlas, and PredictionMarketAMMAtlas together.
+bash script/deploy/deploy-atlas.sh --broadcast
+# Continue an interrupted broadcast after checking its receipts and nonces.
+bash script/deploy/deploy-atlas.sh --broadcast --resume
+```
+
+The runner also finds Foundry in `$HOME/.foundry/bin` or the Windows user
+profile when it is missing from `PATH`; custom installations can set
+`FOUNDRY_DIR` to the directory containing Foundry's `bin` folder.
+
+An alternative environment file can be supplied as the first argument. The
+runner checks the RPC chain ID and supports `--broadcast --start-fresh` to
+archive an unfinished broadcast and deploy new contracts. Previously deployed
+contracts remain on-chain. Save confirmed addresses from
+`broadcast/DeployAtlas.s.sol/<CHAIN_ID>/run-latest.json` into the six Atlas
+address variables in `.env`; obtain prediction's LP address with `shareToken()`
+on the confirmed vault. The runner does not modify `.env`.
+
+After saving the six Atlas addresses and `USDC_ADDRESS` in `.env`, verify only
+the Atlas vaults and their LP tokens:
+
+```bash
+bash script/deploy/verify-atlas.sh
+# An alternative environment file can be supplied as the first argument.
+bash script/deploy/verify-atlas.sh .env.atlas
+```
+
+Verification uses the repository's Solidity 0.8.20, optimizer runs 1, and
+`via_ir` settings. Keep `ATLAS_SIGNER` set to the **original constructor signer**
+for these deployments, even if the trusted signer has since rotated. Maximum
+price age and prediction fee are read from the deployed vaults. The runner
+checks the RPC chain ID, contract code, USDC, and LP token addresses before
+submitting all six contracts. It uses Sourcify for Monad and Robinhood chains,
+the Blockscout PRO gateway for Robinhood mainnet when `BLOCKSCOUT_API_KEY` is
+set, and Etherscan API V2 with `ETHERSCAN_API_KEY` for other chains. Verification
+does not require a private key.
+
+`ATLAS_MAX_PRICE_AGE` defaults to 5 seconds for perpetuals and must be 1-5;
+`PREDICTION_FEE_BPS` defaults to 300 (3%). Authorize the option backend and
+deposit liquidity separately. Options and
+predictions require archived signed quotes stamped exactly at their scheduled
+start and expiry seconds; confirm Atlas can supply these before funding rounds.
+Prediction opening and resolution must submit those quotes within five seconds
+of the boundary. Missing the resolution window leaves the round unresolved and
+its funds locked; there is no late-settlement fallback.
+
+Seed the Atlas pair registries after deployment. Set `PRIVATE_KEY`, `RPC_URL`,
+`CHAIN_ID`, and the three Atlas vault addresses in `.env`. Feed defaults use the
+user's private Atlas feeds from the supplied My Feeds screenshot: BTC #1190,
+ETH #1191, SOL #1193, BNB #1194, HYPE #1195, DOGE #1196, XRP #1197, ZEC #1198,
+AAPL #1199, MSFT #1200, AMZN #1202, GOOGL #1201, META #1204, NVDA #1203,
+and TSLA #1205. Missing or blank overrides use these defaults. Set
+`ATLAS_*_FEED_ID` from `.env.example` to override a mapping (format: `0x` plus
+eight hex digits). BTC #1190 is BTC/USDT; the application retains the BTC_USD
+market name and consumes the signed price directly.
+
+```bash
+# Simulate all initial pairs before broadcasting.
+bash script/deploy/seed-atlas-pairs.sh
+bash script/deploy/seed-atlas-pairs.sh --broadcast
+# Seed one vault (options use BTC/ETH/SOL; perp and prediction use all 15).
+bash script/deploy/seed-atlas-pairs.sh .env option --broadcast
+bash script/deploy/seed-atlas-pairs.sh .env prediction --broadcast
+bash script/deploy/seed-atlas-pairs.sh .env perp --broadcast
+```
+
+The seeder registers all 15 markets in perpetuals and prediction, and BTC, ETH,
+SOL (IDs 0, 1, 2) in options. BTC/ETH/SOL allow 500x leverage, other crypto 250x,
+and stocks 100x; max position sizes are 500,000 USDC for crypto and 50,000 USDC
+for stocks. Each new crypto/stock pair has liquidity weight 5. It
+checks ownership, feed format/uniqueness, and empty registries before preparing
+transactions. Seeding uses separate transactions. Do not restart after a
+partial broadcast: inspect its receipts and nonces, then resume the saved plan
+using the same environment and target with `--broadcast --resume`.
+
 `PerpDexAtlas` is a separate vault based on PerpDex using AtlasOracle's signed
 pull payloads. It has a dedicated deployment script and LP token. See
 [Atlas deployment, feed configuration, and transaction integration](docs/perpdex-atlas.md).

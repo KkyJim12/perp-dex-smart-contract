@@ -24,7 +24,7 @@ contract PerpDexAtlasTest is Test {
         vm.warp(1_000_000);
         usdc = new MockUSDC();
         shares = new ppUSDC();
-        dex = new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 60);
+        dex = new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 5);
         shares.setMinter(address(dex), true);
         dex.addPair("BTC_USD", BTC, 20, 50_000e6, 2, 100, 5e18);
         usdc.ownerMint(address(this), 100_000e6);
@@ -38,22 +38,40 @@ contract PerpDexAtlasTest is Test {
     function testInitialPoolAndEmptyConstructor() public {
         assertEq(shares.balanceOf(address(this)), 100_000e6);
         assertEq(dex.getppUSDCPrice(), 1e18);
-        PerpDexAtlas empty = new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 60);
+        PerpDexAtlas empty = new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 5);
         assertEq(empty.totalLiquidityRatio(), 0);
         assertEq(empty.atlasSigner(), vm.addr(SIGNER_KEY));
-        assertEq(empty.maxPriceAge(), 60);
+        assertEq(empty.maxPriceAge(), 5);
         assertEq(empty.PRICE_DECIMALS(), 8);
     }
 
     function testConstructorRejectsInvalidConfiguration() public {
         vm.expectRevert("Invalid address");
-        new PerpDexAtlas(address(0), address(shares), vm.addr(SIGNER_KEY), 60);
+        new PerpDexAtlas(address(0), address(shares), vm.addr(SIGNER_KEY), 5);
         vm.expectRevert("Invalid address");
-        new PerpDexAtlas(address(usdc), address(0), vm.addr(SIGNER_KEY), 60);
+        new PerpDexAtlas(address(usdc), address(0), vm.addr(SIGNER_KEY), 5);
         vm.expectRevert("Invalid address");
-        new PerpDexAtlas(address(usdc), address(shares), address(0), 60);
+        new PerpDexAtlas(address(usdc), address(shares), address(0), 5);
         vm.expectRevert("Invalid max price age");
         new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 0);
+        vm.expectRevert("Invalid max price age");
+        new PerpDexAtlas(address(usdc), address(shares), vm.addr(SIGNER_KEY), 6);
+    }
+
+    function testCanConfigureStricterPriceAge() public {
+        ppUSDC strictShares = new ppUSDC();
+        PerpDexAtlas strict = new PerpDexAtlas(address(usdc), address(strictShares), vm.addr(SIGNER_KEY), 1);
+        strict.addPair("BTC_USD", BTC, 20, 50_000e6, 2, 100, 5e18);
+        strictShares.setMinter(address(strict), true);
+        usdc.ownerMint(address(this), 10_000e6);
+        usdc.approve(address(strict), type(uint256).max);
+        strict.depositLP(10_000e6);
+        bytes memory callData = abi.encodeCall(strict.openPosition, ("BTC_USD", true, MARGIN, 10, 0, 0));
+        vm.prank(trader);
+        (bool ok, bytes memory reason) =
+            address(strict).call(bytes.concat(callData, _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 2)));
+        assertFalse(ok);
+        assertEq(reason, _reason("Stale oracle price"));
     }
 
     function testCannotRegisterZeroFeed() public {
@@ -106,7 +124,7 @@ contract PerpDexAtlasTest is Test {
         _reject(
             trader,
             _openCall(true),
-            _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 61),
+            _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 6),
             _reason("Stale oracle price")
         );
     }
@@ -124,7 +142,7 @@ contract PerpDexAtlasTest is Test {
     }
 
     function testAcceptsExactFreshnessBoundary() public {
-        _execute(trader, _openCall(true), _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 60));
+        _execute(trader, _openCall(true), _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 5));
         assertEq(_position(0).entryPrice, ENTRY);
     }
 
@@ -142,7 +160,7 @@ contract PerpDexAtlasTest is Test {
         _open(true);
         bytes32 id = _position(0).id;
         uint256 firstTimestamp = vm.getBlockTimestamp();
-        vm.warp(block.timestamp + 10);
+        vm.warp(block.timestamp + 1);
         _execute(trader, abi.encodeCall(dex.modifyTpSl, (id, 60_000e8, 0)), _price(ENTRY));
         assertEq(dex.lastPriceTimestamp(BTC), block.timestamp);
         _reject(
@@ -257,7 +275,8 @@ contract PerpDexAtlasTest is Test {
     function testEveryExitAndModifyRejectsStalePayload() public {
         _open(true);
         bytes32 id = _position(0).id;
-        bytes memory stale = _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 61);
+        vm.warp(block.timestamp + 6);
+        bytes memory stale = _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 6);
         bytes memory reason = _reason("Stale oracle price");
         _reject(trader, abi.encodeCall(dex.closePosition, (id)), stale, reason);
         _reject(trader, abi.encodeCall(dex.modifyTpSl, (id, 60_000e8, 0)), stale, reason);
@@ -265,6 +284,16 @@ contract PerpDexAtlasTest is Test {
         _reject(address(this), abi.encodeCall(dex.liquidate, (trader, id)), stale, reason);
         _reject(address(this), abi.encodeCall(dex.closeAllPositions, ()), stale, reason);
         assertFalse(_position(0).isClosed);
+    }
+
+    function testModifyAndCloseAcceptExactlyFiveSecondOldPrice() public {
+        _open(true);
+        bytes32 id = _position(0).id;
+        vm.warp(block.timestamp + 5);
+        bytes memory payload = _payload(SIGNER_KEY, BTC, ENTRY * 1e10, block.timestamp - 5);
+        _execute(trader, abi.encodeCall(dex.modifyTpSl, (id, 60_000e8, 0)), payload);
+        _execute(trader, abi.encodeCall(dex.closePosition, (id)), payload);
+        assertTrue(_position(0).isClosed);
     }
 
     function testEmergencyCloseRequiresAllFeedsAndIsAtomic() public {
@@ -281,6 +310,17 @@ contract PerpDexAtlasTest is Test {
             abi.encodeCall(dex.closeAllPositions, ()),
             _price(ENTRY),
             abi.encodeWithSelector(IPullOracleBase.UnmatchedFeedID.selector, ETH)
+        );
+        assertFalse(_position(0).isClosed);
+        assertFalse(_position(1).isClosed);
+        bytes memory stalePackages = abi.encodePacked(
+            BTC, uint80(ENTRY * 1e10), uint48(block.timestamp), ETH, uint80(3_000e18), uint48(block.timestamp - 6)
+        );
+        _reject(
+            address(this),
+            abi.encodeCall(dex.closeAllPositions, ()),
+            _signPackages(SIGNER_KEY, stalePackages, 2),
+            _reason("Stale oracle price")
         );
         assertFalse(_position(0).isClosed);
         assertFalse(_position(1).isClosed);

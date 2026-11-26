@@ -26,7 +26,8 @@ Configure `USDC_ADDRESS`, `PRIVATE_KEY`, `RPC_URL`, and `CHAIN_ID` in `.env`.
 Use six-decimal USDC collateral. `ATLAS_SIGNER` defaults to the signing key
 published by Atlas at implementation time,
 `0x59eD4701224fD9e2a85Ef2946c2ab828C1dDC600`.
-`ATLAS_MAX_PRICE_AGE` defaults to 60 seconds. Check Atlas's current signing key
+`ATLAS_MAX_PRICE_AGE` defaults to 5 seconds and must be between 1 and 5.
+The contract rejects a constructor value above five seconds. Check Atlas's current signing key
 when deploying; it is a signer address, not an oracle contract address.
 
 From Git Bash, macOS, or Linux:
@@ -54,6 +55,16 @@ claims on that old vault. This script does not migrate positions or liquidity,
 seed pairs, or deploy the other markets.
 
 Register each pair using its Atlas-assigned **bytes4** feed ID:
+
+To seed the eight crypto and seven private stock-feed perpetual pairs, run
+`bash script/deploy/seed-atlas-pairs.sh .env perp` to simulate, then add
+`--broadcast` to send. The target must be owned by `PRIVATE_KEY` and have no
+registered pairs. The default `all` target also seeds the Atlas option and
+prediction vaults. For partial broadcasts, use the saved plan with
+`--broadcast --resume` after inspecting receipts and nonces.
+Feed mappings and overrides are listed in `.env.example` and
+`script/AtlasInitialPairConfig.sol`. Explicit IDs must be nonzero, unique bytes4.
+Missing required feeds fail validation before any pairs are added.
 
 ```solidity
 dex.addPair("BTC_USD", atlasBtcFeedId, 20, 50_000e6, 2, 100, 5e18);
@@ -96,7 +107,7 @@ import { PullOracleConsumerClient } from "@atlas-oracle/pull-oracle-consumer-sdk
 const client = new PullOracleConsumerClient({
   http: { apiKey: process.env.ATLAS_API_KEY! },
   validate: true,
-  maxDelay: 60,          // Match the deployed vault's maxPriceAge().
+  maxDelay: 5,           // Match the deployed vault's maxPriceAge().
   maxFutureDrift: 0,
   maxPackageCount: 255,
 });

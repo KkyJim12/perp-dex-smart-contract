@@ -17,6 +17,7 @@ interface IAtlasPpUSDC {
 contract PerpDexAtlas is PullOracleConsumerStandard {
     address public atlasSigner;
     uint256 public immutable maxPriceAge;
+    uint256 public constant MAX_PRICE_AGE = 5;
     uint8 public constant PRICE_DECIMALS = 8;
     mapping(bytes4 => uint256) public lastPriceTimestamp;
 
@@ -194,7 +195,7 @@ contract PerpDexAtlas is PullOracleConsumerStandard {
 
     constructor(address _usdc, address _ppUSDC, address _atlasSigner, uint256 _maxPriceAge) {
         require(_usdc != address(0) && _ppUSDC != address(0) && _atlasSigner != address(0), "Invalid address");
-        require(_maxPriceAge > 0, "Invalid max price age");
+        require(_maxPriceAge > 0 && _maxPriceAge <= MAX_PRICE_AGE, "Invalid max price age");
         atlasSigner = _atlasSigner;
         maxPriceAge = _maxPriceAge;
         usdc = ERC20(_usdc);

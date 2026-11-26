@@ -9,6 +9,7 @@ import {ppUSDC} from "../src/ppUSDC.sol";
 contract DeployPerpDexAtlas is Script {
     function run() external returns (address atlasPpUSDCAddress, address perpDexAtlasAddress) {
         (uint256 key, address usdc, address signer, uint256 maxAge) = _deploymentConfig();
+        require(maxAge > 0 && maxAge <= 5, "Invalid max price age");
 
         vm.startBroadcast(key);
         ppUSDC shares = new ppUSDC();
@@ -30,6 +31,6 @@ contract DeployPerpDexAtlas is Script {
         usdc = vm.envAddress("USDC_ADDRESS");
         // Production key published by Atlas; override after an official rotation.
         signer = vm.envOr("ATLAS_SIGNER", address(0x59eD4701224fD9e2a85Ef2946c2ab828C1dDC600));
-        maxAge = vm.envOr("ATLAS_MAX_PRICE_AGE", uint256(60));
+        maxAge = vm.envOr("ATLAS_MAX_PRICE_AGE", uint256(5));
     }
 }

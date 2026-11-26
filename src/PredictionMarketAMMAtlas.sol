@@ -18,7 +18,7 @@ contract PredictionMarketAMMAtlas is AtlasMarketOracle, ReentrancyGuard {
 
     uint256 public constant BPS = 10_000;
     uint256 public constant MAX_UTILIZATION_BPS = 8_000;
-    uint64 public constant ORACLE_WINDOW = 30;
+    uint64 public constant ORACLE_WINDOW = 5;
     uint64 public constant TRADING_CUTOFF = 5;
     uint256 public constant WAD = 1e18;
     uint256 public constant YEAR = 365 days;
@@ -338,7 +338,9 @@ contract PredictionMarketAMMAtlas is AtlasMarketOracle, ReentrancyGuard {
     }
 
     function _boundaryPrice(uint256 pairId, uint64 timestamp) private returns (uint256) {
-        return _atlasBoundaryPrice(pairs[pairId].atlasFeedId, timestamp);
+        uint256 price = _atlasBoundaryPrice(pairs[pairId].atlasFeedId, timestamp);
+        require(block.timestamp - timestamp <= MAX_PRICE_AGE, "Invalid publish time");
+        return price;
     }
 
     function _currentPrice(Market storage m) private returns (uint256) {

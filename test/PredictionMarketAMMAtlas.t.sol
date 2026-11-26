@@ -93,22 +93,73 @@ contract PredictionMarketAMMAtlasTest is AtlasSignedTest {
         _execute(address(amm), bob, abi.encodeCall(amm.resolveMarket, (id)), _payload(BTC, 101e18, 1200));
     }
 
-    function testDelayedResolutionUsesArchivedQuoteDespiteNewerSpotMarket() public {
+    function testDelayedResolutionRejectsArchivedQuoteDespiteNewerSpotMarket() public {
         _buy(alice, 0, true, 100e6, OPEN);
         uint256 second = amm.createMarket(0, 900, 900, 10_000);
         vm.warp(900);
         _execute(address(amm), bob, abi.encodeCall(amm.openMarket, (second)), _payload(BTC, OPEN, 900));
         uint256 liability = _buy(bob, second, false, 200e6, OPEN);
-        _execute(address(amm), bob, abi.encodeCall(amm.resolveMarket, (0)), _payload(BTC, OPEN, 600));
+        _reject(
+            address(amm),
+            bob,
+            abi.encodeCall(amm.resolveMarket, (0)),
+            _payload(BTC, OPEN, 600),
+            _reason("Invalid publish time")
+        );
         assertEq(amm.lastSpotTimestamp(BTC), 900);
-        assertEq(amm.reservedPayout(), liability);
-        assertEq(amm.unresolvedExposureMarkets(), 1);
+        assertGt(amm.reservedPayout(), liability);
+        assertEq(amm.unresolvedExposureMarkets(), 2);
         vm.prank(lp);
         vm.expectRevert("Unresolved markets lock LPs");
         amm.withdraw(1e6, 0);
-        _resolve(second, 99e18, 1800);
-        assertEq(amm.reservedPayout(), 0);
+        assertEq(uint256(amm.getMarket(0).status), uint256(PredictionMarketAMMAtlas.Status.Trading));
+    }
+
+    function testOpeningAcceptsFiveSecondOldBoundaryAndRejectsSixSeconds() public {
+        uint256 id = amm.createMarket(0, 300, 900, 10_000);
+        vm.warp(906);
+        _reject(
+            address(amm),
+            bob,
+            abi.encodeCall(amm.openMarket, (id)),
+            _payload(BTC, OPEN, 900),
+            _reason("Opening window closed")
+        );
+        assertEq(amm.boundaryPrices(BTC, 900), 0);
+        assertEq(uint256(amm.getMarket(id).status), uint256(PredictionMarketAMMAtlas.Status.Scheduled));
+        // Rewind only to exercise the inclusive boundary on the same untouched round.
+        vm.warp(905);
+        _execute(address(amm), bob, abi.encodeCall(amm.openMarket, (id)), _payload(BTC, OPEN, 900));
+        assertEq(amm.getMarket(id).openingPrice, OPEN);
+    }
+
+    function testResolutionAcceptsFiveSecondOldBoundaryAndRejectsSixSeconds() public {
+        _buy(alice, 0, true, 100e6, OPEN);
+        vm.warp(606);
+        _reject(
+            address(amm),
+            bob,
+            abi.encodeCall(amm.resolveMarket, (0)),
+            _payload(BTC, OPEN, 600),
+            _reason("Invalid publish time")
+        );
+        assertEq(amm.boundaryPrices(BTC, 600), 0);
+        assertEq(amm.unresolvedExposureMarkets(), 1);
+        vm.warp(605);
+        _execute(address(amm), bob, abi.encodeCall(amm.resolveMarket, (0)), _payload(BTC, OPEN, 600));
         assertEq(amm.unresolvedExposureMarkets(), 0);
+        assertEq(amm.reservedPayout(), 0);
+    }
+
+    function testBuyAcceptsExactlyFiveSecondOldPrice() public {
+        vm.warp(305);
+        _execute(
+            address(amm),
+            alice,
+            abi.encodeCall(amm.buy, (0, true, 100e6, OPEN, 0, uint256(305))),
+            _payload(BTC, OPEN, 300)
+        );
+        assertGt(amm.upBalance(0, alice), 0);
     }
 
     function testBuyRejectsStaleFutureAndMismatchedPrices() public {
